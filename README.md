@@ -130,6 +130,53 @@ git-init personal ./new-service
 1. Runs `git init` on the target directory.
 2. Applies the specified profile's identity, SSH transport configuration, and commit signing flags directly to `.git/config`.
 
+
+---
+
+### 4. `git-set-profile`
+
+Applies or switches profile settings directly inside an existing Git repository or submodule.
+
+```bash
+git-set-profile <profile>
+
+```
+
+#### Examples:
+
+```bash
+# Apply a profile to an existing repository
+cd ~/projects/legacy-repo
+git-set-profile work
+
+# Switch an active repository to a different identity
+git-set-profile personal
+
+# Configure a newly added submodule
+cd libs/nested-module
+git-set-profile freelance
+
+```
+
+#### What it does:
+
+1. Verifies that the current directory is an active Git working tree (works transparently for regular repositories and submodules pointing to `.git/modules/...`).
+2. Reads the profile settings from `~/.config/my-git/profiles/<profile>`.
+3. Validates and enforces correct POSIX permissions on keys and directories.
+4. Updates local repository configurations:
+* Sets `core.sshCommand = ssh -i <key> -o IdentitiesOnly=yes` to ensure network actions (`pull`, `fetch`, `push`) use the correct key.
+* Updates `user.name` and `user.email`.
+* Configures SSH commit/tag signing (`gpg.format = ssh`, `user.signingkey`, `commit.gpgsign = true`).
+
+
+
+#### Common Use Cases:
+
+* **Nested Repositories & Submodules**: Safely apply an alternate identity to a sub-project or submodule residing inside a parent project without risking key or author leaks.
+* **Migrating Existing Projects**: Adopt profiles across projects cloned prior to using `my-git` without needing to re-clone them.
+* **Instant Profile Switching**: Reassign the commit identity and SSH key of an existing workspace in place.
+
+
 ---
 
 ## Quickstart
