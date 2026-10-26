@@ -14,6 +14,64 @@ Each profile maintains its own dedicated SSH key pair, commit metadata (`user.na
 * **Automatic Permissions Management**: Automatically enforces strict POSIX permissions (`700` for directories, `600` for private keys, `644` for public keys).
 * **Local Verification**: Centralized `allowed_signers` management eliminates `No principal matched` errors when running `git log --show-signature`.
 
+
+---
+
+## Installation
+
+Clone the repository and run the `install-my-git` installer:
+
+```bash
+git clone [https://github.com/oldienki/my-git.git](https://github.com/oldienki/my-git.git)
+cd my-git
+./install-my-git
+
+```
+
+### What the installer does:
+
+1. **Installs executables**: Copies all CLI tools (`git-add-profile`, `git-clone`, `git-init`, `git-set-profile`, `git-export-profile`, `git-import-profile`) to `~/.local/bin` (or a specified directory) with `755` permissions.
+2. **Initializes config directories**: Creates `~/.config/my-git/profiles` and `~/.config/my-git/keys` with strict `700` POSIX permissions.
+3. **Installs shell completion**: Places `my-git-completion.bash` into `~/.config/my-git/`.
+4. **Collision safety**: Checks for existing files or symlinks before writing. If collisions exist, it safely aborts unless forced.
+
+### Installation Options:
+
+* **Install to a custom path:**
+```bash
+./install-my-git /usr/local/bin
+
+```
+
+
+* **Force overwrite existing versions/symlinks:**
+```bash
+./install-my-git -f
+
+```
+
+---
+
+## Shell Autocompletion Setup
+
+Enable instant `<TAB>` completion for profile names, flags, and directories by adding the following snippet to your shell configuration:
+
+### For Bash (`~/.bashrc`)
+
+```bash
+source ~/.config/my-git/my-git-completion.bash
+
+```
+
+### For Zsh (`~/.zshrc`)
+
+```zsh
+autoload -Uz compinit bashcompinit
+compinit && bashcompinit
+source ~/.config/my-git/my-git-completion.bash
+
+```
+
 ---
 
 ## Directory Structure

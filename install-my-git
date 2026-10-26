@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git"
+PROFILES_DIR="$CONFIG_DIR/profiles"
+KEYS_DIR="$CONFIG_DIR/keys"
+COMPLETION_FILENAME="my-git-completion.bash"
+
+TOOLS=(
+    "git-add-profile"
+    "git-clone"
+    "git-init"
+    "git-set-profile"
+    "git-export-profile"
+    "git-import-profile"
+)
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [options] [target_directory]
+
+Installs my-git CLI tools into the specified directory (defaults to ~/.local/bin)
+and initializes configuration and completion files in $CONFIG_DIR.
+
+Options:
+  -f, --force    Overwrite existing files and symlinks without prompting
+  -h, --help     Display this help message
+
+Examples:
+  $(basename "$0")
+  $(basename "$0") -f
+  $(basename "$0") /usr/local/bin
+  $(basename "$0") --force ~/.bin
+EOF
+    exit 1
+}
+
+FORCE=false
+TARGET_DIR=""
+
+# Parse command-line arguments
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -f|--force)
+            FORCE=true
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        -*)
+            echo "Error: Unknown option '$1'" >&2
+            exit 1
+            ;;
+        *)
+            if [ -n "$TARGET_DIR" ]; then
+                echo "Error: Unexpected argument '$1'" >&2
+                exit 1
+            fi
+            TARGET_DIR="$1"
+            shift
+            ;;
+    esac
+done
+
+TARGET_DIR="${TARGET_DIR:-$HOME/.local/bin}"
+TARGET_DIR="${TARGET_DIR/#\~/$HOME}"
+
+# Locate source directory containing tool scripts
+SOURCE_DIR="$SCRIPT_DIR"
+if [ ! -f "$SOURCE_DIR/git-clone" ] && [ -d "$SCRIPT_DIR/bin" ] && [ -f "$SCRIPT_DIR/bin/git-clone" ]; then
+    SOURCE_DIR="$SCRIPT_DIR/bin"
+fi
+
+# Validate presence of tool source files
+MISSING_SOURCES=()
+for tool in "${TOOLS[@]}"; do
+    if [ ! -f "$SOURCE_DIR/$tool" ]; then
+        MISSING_SOURCES+=("$tool")
+    fi
+done
+
+if [ "${#MISSING_SOURCES[@]}" -gt 0 ]; then
+    echo "Error: Source script(s) missing in $SOURCE_DIR:" >&2
+    for item in "${MISSING_SOURCES[@]}"; do
+        echo "  - $item" >&2
+    done
+    exit 1
+fi
+
+# Detect existing files and symlinks in target directory
+COLLISIONS=()
+for tool in "${TOOLS[@]}"; do
+    dest="$TARGET_DIR/$tool"
+    if [ -L "$dest" ] || [ -e "$dest" ]; then
+        if [ -L "$dest" ]; then
+            COLLISIONS+=("$tool (symlink -> $(readlink "$dest" 2>/dev/null || echo "broken"))")
+        else
+            COLLISIONS+=("$tool (file)")
+        fi
+    fi
+done
+
+# Abort if collisions found without --force
+if [ "${#COLLISIONS[@]}" -gt 0 ] && [ "$FORCE" = false ]; then
+    echo "Error: Existing files or symlinks detected in target directory '$TARGET_DIR':" >&2
+    for collision in "${COLLISIONS[@]}"; do
+        echo "  ! $collision" >&2
+    done
+    echo "" >&2
+    echo "Installation aborted to prevent overwriting." >&2
+    echo "Re-run with '-f' or '--force' to overwrite existing utilities:" >&2
+    echo "  $(basename "$0") -f \"$TARGET_DIR\"" >&2
+    exit 1
+fi
+
+# Create target binaries directory
+mkdir -p "$TARGET_DIR"
+
+# Create and protect configuration directories
+echo "==> Setting up configuration directories..."
+mkdir -p "$PROFILES_DIR" "$KEYS_DIR"
+chmod 700 "$KEYS_DIR"
+echo "  + Config directory:   $CONFIG_DIR"
+echo "  + Profiles directory: $PROFILES_DIR"
+echo "  + Keys directory:     $KEYS_DIR (chmod 700)"
+
+# Install autocompletion script if present
+COMPLETION_INSTALLED=false
+TARGET_COMPLETION="$CONFIG_DIR/$COMPLETION_FILENAME"
+if [ -f "$SOURCE_DIR/$COMPLETION_FILENAME" ]; then
+    cp "$SOURCE_DIR/$COMPLETION_FILENAME" "$TARGET_COMPLETION"
+    chmod 644 "$TARGET_COMPLETION"
+    echo "  + Completion script:  $TARGET_COMPLETION"
+    COMPLETION_INSTALLED=true
+fi
+
+# Install tool executables
+echo "==> Installing my-git utilities to $TARGET_DIR..."
+
+for tool in "${TOOLS[@]}"; do
+    src="$SOURCE_DIR/$tool"
+    dest="$TARGET_DIR/$tool"
+
+    if [ -L "$dest" ] || [ -e "$dest" ]; then
+        rm -f "$dest"
+    fi
+
+    cp "$src" "$dest"
+    chmod 755 "$dest"
+    echo "  + Installed: $tool"
+done
+
+echo ""
+echo "==> Installation complete!"
+
+# Check if target directory is in PATH
+case ":$PATH:" in
+    *":$TARGET_DIR:"*) ;;
+    *)
+        echo ""
+        echo "PATH Configuration:"
+        echo "  '$TARGET_DIR' is not in your current PATH."
+        echo "  Add it to your shell profile (~/.bashrc or ~/.zshrc):"
+        echo "    export PATH=\"\$PATH:$TARGET_DIR\""
+        ;;
+esac
+
+# Shell autocompletion setup instructions
+if [ "$COMPLETION_INSTALLED" = true ]; then
+    echo ""
+    echo "Shell Autocompletion Setup:"
+    echo "  To enable tab completion for my-git tools, add one of the following snippets:"
+    echo ""
+    echo "  For Bash (~/.bashrc):"
+    echo "    source \"$TARGET_COMPLETION\""
+    echo ""
+    echo "  For Zsh (~/.zshrc):"
+    echo "    autoload -Uz compinit bashcompinit"
+    echo "    compinit && bashcompinit"
+    echo "    source \"$TARGET_COMPLETION\""
+fi
