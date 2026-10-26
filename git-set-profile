@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# ~/.local/bin/git-set-profile
+set -euo pipefail
+
+PROFILES_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git/profiles"
+KEYS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git/keys"
+
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $(basename "$0") <profile>" >&2
+    exit 1
+fi
+
+PROFILE="$1"
+PROFILE_FILE="$PROFILES_DIR/$PROFILE"
+
+if [ ! -d ".git" ] && ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Error: Current directory is not a Git repository" >&2
+    exit 1
+fi
+
+if [ ! -f "$PROFILE_FILE" ]; then
+    echo "Error: Profile '$PROFILE' not found" >&2
+    exit 1
+fi
+
+resolve_key_path() {
+    local raw_path="$1"
+    if [ -z "$raw_path" ]; then echo ""
+    elif [[ "$raw_path" = /* ]]; then echo "$raw_path"
+    elif [[ "$raw_path" == "~"* ]]; then echo "${raw_path/#\~/$HOME}"
+    elif [ -f "$KEYS_DIR/$raw_path" ]; then echo "$KEYS_DIR/$raw_path"
+    else echo "$HOME/.ssh/$raw_path"
+    fi
+}
+
+USER_NAME=""
+USER_EMAIL=""
+SSH_KEY=""
+SIGNING_KEY=""
+
+while IFS='=' read -r key val || [ -n "$key" ]; do
+    [[ "$key" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "${key// }" ]] && continue
+    key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
+    val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+    if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
+
+    case "$key" in
+        name)        USER_NAME="$val" ;;
+        email)       USER_EMAIL="$val" ;;
+        ssh_key)     SSH_KEY="$val" ;;
+        signing_key) SIGNING_KEY="$val" ;;
+    esac
+done < "$PROFILE_FILE"
+
+SSH_KEY_PATH=$(resolve_key_path "$SSH_KEY")
+SSH_CMD="ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes"
+
+echo "==> Applying profile '$PROFILE' to repository at $(pwd)..."
+git config core.sshCommand "$SSH_CMD"
+[ -n "$USER_NAME" ]  && git config user.name "$USER_NAME"
+[ -n "$USER_EMAIL" ] && git config user.email "$USER_EMAIL"
+
+if [ -n "$SIGNING_KEY" ]; then
+    SIGNING_KEY_PATH=$(resolve_key_path "$SIGNING_KEY")
+    git config gpg.format ssh
+    git config user.signingkey "$SIGNING_KEY_PATH"
+    git config commit.gpgsign true
+    git config tag.gpgsign true
+fi
+
+echo "==> Done. Repository configuration updated."
