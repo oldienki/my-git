@@ -142,6 +142,7 @@ cd "$TARGET_DIR"
 
 echo "==> Applying local repository settings..."
 git config core.sshCommand "$SSH_CMD"
+git config gpg.ssh.allowedSignersFile "$HOME/.config/my-git/allowed_signers"
 
 [ -n "$USER_NAME" ]  && git config user.name "$USER_NAME"
 [ -n "$USER_EMAIL" ] && git config user.email "$USER_EMAIL"

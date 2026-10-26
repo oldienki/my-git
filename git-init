@@ -129,6 +129,7 @@ else
 fi
 
 SSH_CMD="ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes"
+git config --global gpg.ssh.allowedSignersFile "$HOME/.config/my-git/allowed_signers"
 
 # Initialize Git repository
 if [ "$TARGET_DIR" != "." ] && [ ! -d "$TARGET_DIR" ]; then

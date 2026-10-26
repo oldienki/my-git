@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git"
+PROFILES_DIR="$CONFIG_DIR/profiles"
+KEYS_DIR="$CONFIG_DIR/keys"
+ALLOWED_SIGNERS="$CONFIG_DIR/allowed_signers"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") <profile>
+
+Creates a new Git profile:
+  1. Generates an Ed25519 SSH key pair in $KEYS_DIR/<profile> (if missing).
+  2. Adds the public key to $ALLOWED_SIGNERS.
+  3. Creates $PROFILES_DIR/<profile> leaving only 'name' and 'email' blank.
+
+Example:
+  $(basename "$0") work
+  $(basename "$0") personal
+EOF
+    exit 1
+}
+
+if [ "$#" -ne 1 ] || [ -z "$1" ]; then
+    usage
+fi
+
+PROFILE="$1"
+
+if [[ "$PROFILE" =~ [/[:space:]] ]]; then
+    echo "Error: Profile name cannot contain slashes or spaces" >&2
+    exit 1
+fi
+
+# Ensure target directories exist with safe permissions
+mkdir -p "$PROFILES_DIR" "$KEYS_DIR"
+chmod 700 "$KEYS_DIR"
+
+KEY_FILE="$KEYS_DIR/$PROFILE"
+PUB_KEY_FILE="$KEY_FILE.pub"
+PROFILE_FILE="$PROFILES_DIR/$PROFILE"
+
+# 1. Generate SSH key pair if not present
+if [ -f "$KEY_FILE" ]; then
+    echo "==> SSH key already exists: $KEY_FILE (skipping generation)"
+else
+    echo "==> Generating Ed25519 SSH key: $KEY_FILE"
+    ssh-keygen -t ed25519 -C "$PROFILE" -f "$KEY_FILE"
+    chmod 600 "$KEY_FILE"
+    [ -f "$PUB_KEY_FILE" ] && chmod 644 "$PUB_KEY_FILE"
+fi
+
+if [ ! -f "$PUB_KEY_FILE" ]; then
+    echo "Error: Public key file not found: $PUB_KEY_FILE" >&2
+    exit 1
+fi
+
+# 2. Register public key in allowed_signers
+touch "$ALLOWED_SIGNERS"
+chmod 644 "$ALLOWED_SIGNERS"
+
+# Extract raw base64 key body to check for existing entries
+RAW_KEY=$(awk '{print $2}' "$PUB_KEY_FILE")
+
+if grep -qF "$RAW_KEY" "$ALLOWED_SIGNERS" 2>/dev/null; then
+    echo "==> Public key is already present in $ALLOWED_SIGNERS"
+else
+    echo "==> Adding key to $ALLOWED_SIGNERS..."
+    # '*' as principal allows matching any commit email signed by this key
+    echo "* namespaces=\"git\" $(cat "$PUB_KEY_FILE")" >> "$ALLOWED_SIGNERS"
+fi
+
+# Ensure Git knows about allowedSignersFile globally
+CURRENT_SIGNERS_CFG=$(git config --global --get gpg.ssh.allowedSignersFile 2>/dev/null || true)
+if [ -z "$CURRENT_SIGNERS_CFG" ]; then
+    echo "==> Setting global gpg.ssh.allowedSignersFile to $ALLOWED_SIGNERS"
+    git config gpg.ssh.allowedSignersFile "$ALLOWED_SIGNERS"
+fi
+
+# 3. Create profile template leaving name and email empty
+if [ -f "$PROFILE_FILE" ]; then
+    echo "==> Profile already exists: $PROFILE_FILE (skipping creation)"
+else
+    echo "==> Writing profile configuration to $PROFILE_FILE"
+    cat > "$PROFILE_FILE" <<EOF
+name = 
+email = 
+ssh_key = $PROFILE
+signing_key = $PROFILE.pub
+EOF
+fi
+
+echo ""
+echo "==> Profile '$PROFILE' ready!"
+echo "    Key:      $KEY_FILE"
+echo "    Pubkey:   $PUB_KEY_FILE"
+echo "    Profile:  $PROFILE_FILE"
+echo ""
+echo "Next steps:"
+echo "1. Set your name and email in: $PROFILE_FILE"
+echo "2. Copy the public key to your Git hosting service (GitHub/GitLab):"
+echo "   cat $PUB_KEY_FILE"
+
