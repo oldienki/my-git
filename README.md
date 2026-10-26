@@ -179,6 +179,84 @@ git-set-profile freelance
 
 ---
 
+### 5. `git-export-profile`
+
+Bundles specified Git profiles and their associated private/public SSH keys into a password-protected, AES-256-CBC encrypted tar archive.
+
+```bash
+git-export-profile [--all | <profile1> [profile2 ...]] [-o <output_file>]
+
+```
+
+#### Options:
+
+* `-a`, `--all`: Export all profiles present in `~/.config/my-git/profiles`.
+* `-o`, `--output <file>`: Target archive path (defaults to `./my-git-export-<timestamp>.tar.enc`).
+* `-h`, `--help`: Show usage instructions.
+
+#### Examples:
+
+```bash
+# Export specific profiles
+git-export-profile work personal
+
+# Export all profiles to a custom backup path
+git-export-profile --all -o ~/Desktop/my-git-backup.tar.enc
+
+```
+
+#### What it does:
+
+1. Prompts for an encryption passphrase with non-echoed input and confirmation.
+2. Isolates profile configurations and discovers all referenced SSH private and public keys.
+3. Stages the files into a clean temporary directory.
+4. Creates a compressed `tar` archive and encrypts it using OpenSSL (`aes-256-cbc`, `-salt`, `-pbkdf2`, `100,000` iterations).
+5. Clears sensitive passphrase variables from memory upon completion.
+
+---
+
+### 6. `git-import-profile`
+
+Inspects or restores profiles and SSH keys from an encrypted archive created by `git-export-profile`.
+
+```bash
+git-import-profile <archive.tar.enc> [options | <profile1> [profile2 ...]]
+
+```
+
+#### Options:
+
+* `-l`, `--list`: Display a table of all profiles in the archive (including names and emails) without importing anything.
+* `-a`, `--all`: Import all profiles and keys stored in the archive.
+* `<profile...>`: Import only the designated profile(s).
+* `-h`, `--help`: Show usage instructions.
+
+#### Examples:
+
+```bash
+# Preview archive contents (Profile name, Git User Name, Git Email)
+git-import-profile backup.tar.enc --list
+
+# Import every profile and key found in the archive
+git-import-profile backup.tar.enc --all
+
+# Selectively import specific profiles
+git-import-profile backup.tar.enc work freelance
+
+```
+
+#### What it does:
+
+1. Prompts for the archive decryption passphrase and unpacks contents into a secure temporary workspace.
+2. In `--list` mode: parses and formats profile metadata into a terminal overview table.
+3. In import mode:
+* Restores profile configurations into `~/.config/my-git/profiles/`.
+* Restores SSH private and public keys to `~/.config/my-git/keys/`, enforcing strict POSIX permissions (`600` for private keys, `644` for public keys, `700` for directories).
+* Automatically extracts public signing keys and registers them in `~/.config/my-git/allowed_signers` (skipping duplicates).
+* Configures Git's global `gpg.ssh.allowedSignersFile` setting if not already present.
+
+---
+
 ## Quickstart
 
 ### 1. Installation

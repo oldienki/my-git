@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git"
+PROFILES_DIR="$CONFIG_DIR/profiles"
+KEYS_DIR="$CONFIG_DIR/keys"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [--all | <profile1> [profile2 ...]] [-o <output_file>]
+
+Exports Git profiles and their associated SSH keys into an AES-256-CBC encrypted tar archive.
+
+Options:
+  --all, -a            Export all profiles found in $PROFILES_DIR
+  -o, --output <file>  Specify output archive path (default: ./my-git-export-<timestamp>.tar.enc)
+  -h, --help           Display this help message
+
+Examples:
+  $(basename "$0") work
+  $(basename "$0") work personal -o backup.tar.enc
+  $(basename "$0") --all
+EOF
+    exit 1
+}
+
+if [ "$#" -eq 0 ]; then
+    usage
+fi
+
+ALL_PROFILES=false
+OUTPUT_FILE=""
+TARGET_PROFILES=()
+
+# Parse command line options
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -a|--all)
+            ALL_PROFILES=true
+            shift
+            ;;
+        -o|--output)
+            if [ -z "${2:-}" ]; then
+                echo "Error: Option '$1' requires an argument" >&2
+                exit 1
+            fi
+            OUTPUT_FILE="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            ;;
+        -*)
+            echo "Error: Unknown option '$1'" >&2
+            exit 1
+            ;;
+        *)
+            TARGET_PROFILES+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Resolve profile list
+if [ "$ALL_PROFILES" = true ]; then
+    if [ ! -d "$PROFILES_DIR" ]; then
+        echo "Error: Profiles directory does not exist: $PROFILES_DIR" >&2
+        exit 1
+    fi
+    TARGET_PROFILES=()
+    for file in "$PROFILES_DIR"/*; do
+        [ -f "$file" ] && TARGET_PROFILES+=("$(basename "$file")")
+    done
+    if [ "${#TARGET_PROFILES[@]}" -eq 0 ]; then
+        echo "Error: No profiles found in $PROFILES_DIR" >&2
+        exit 1
+    fi
+elif [ "${#TARGET_PROFILES[@]}" -eq 0 ]; then
+    usage
+fi
+
+DEFAULT_NAME="my-git-export-$(date +%Y%m%d_%H%M%S).tar.enc"
+OUTPUT_FILE="${OUTPUT_FILE:-$DEFAULT_NAME}"
+
+# Resolve key path helper
+resolve_key_path() {
+    local raw_path="$1"
+    if [ -z "$raw_path" ]; then
+        echo ""
+    elif [[ "$raw_path" = /* ]]; then
+        echo "$raw_path"
+    elif [[ "$raw_path" == "~"* ]]; then
+        echo "${raw_path/#\~/$HOME}"
+    elif [ -f "$KEYS_DIR/$raw_path" ]; then
+        echo "$KEYS_DIR/$raw_path"
+    else
+        echo "$HOME/.ssh/$raw_path"
+    fi
+}
+
+# Verify profile existence
+for profile in "${TARGET_PROFILES[@]}"; do
+    if [ ! -f "$PROFILES_DIR/$profile" ]; then
+        echo "Error: Profile '$profile' not found in $PROFILES_DIR" >&2
+        exit 1
+    fi
+done
+
+# Create isolated staging directory
+TMP_STAGING=$(mktemp -d)
+trap 'rm -rf "$TMP_STAGING"' EXIT
+
+mkdir -p "$TMP_STAGING/profiles" "$TMP_STAGING/keys"
+
+echo "==> Collecting profile configurations and SSH keys..."
+
+for profile in "${TARGET_PROFILES[@]}"; do
+    PROFILE_FILE="$PROFILES_DIR/$profile"
+    cp "$PROFILE_FILE" "$TMP_STAGING/profiles/$profile"
+    echo "  + Profile: $profile"
+
+    SSH_KEY=""
+    SIGNING_KEY=""
+
+    # Extract referenced keys from profile file
+    while IFS='=' read -r key val || [ -n "$key" ]; do
+        [[ "$key" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${key// }" ]] && continue
+        key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
+        val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+        if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
+
+        case "$key" in
+            ssh_key)     SSH_KEY="$val" ;;
+            signing_key) SIGNING_KEY="$val" ;;
+        esac
+    done < "$PROFILE_FILE"
+
+    # Bundle SSH key and public key if found
+    if [ -n "$SSH_KEY" ]; then
+        RESOLVED_KEY=$(resolve_key_path "$SSH_KEY")
+        if [ -f "$RESOLVED_KEY" ]; then
+            cp "$RESOLVED_KEY" "$TMP_STAGING/keys/$(basename "$RESOLVED_KEY")"
+            echo "    -> Private key: $(basename "$RESOLVED_KEY")"
+            if [ -f "$RESOLVED_KEY.pub" ]; then
+                cp "$RESOLVED_KEY.pub" "$TMP_STAGING/keys/$(basename "$RESOLVED_KEY.pub")"
+                echo "    -> Public key:  $(basename "$RESOLVED_KEY.pub")"
+            fi
+        fi
+    fi
+
+    # Bundle signing key if different from ssh_key
+    if [ -n "$SIGNING_KEY" ]; then
+        RESOLVED_SIGNING=$(resolve_key_path "$SIGNING_KEY")
+        if [ -f "$RESOLVED_SIGNING" ] && [ ! -f "$TMP_STAGING/keys/$(basename "$RESOLVED_SIGNING")" ]; then
+            cp "$RESOLVED_SIGNING" "$TMP_STAGING/keys/$(basename "$RESOLVED_SIGNING")"
+            echo "    -> Signing key: $(basename "$RESOLVED_SIGNING")"
+        fi
+    fi
+done
+
+echo ""
+# Prompt for encryption passphrase
+read -rsp "Enter encryption passphrase: " PASS1
+echo
+if [ -z "$PASS1" ]; then
+    echo "Error: Passphrase cannot be empty" >&2
+    exit 1
+fi
+
+read -rsp "Confirm encryption passphrase: " PASS2
+echo
+if [ "$PASS1" != "$PASS2" ]; then
+    echo "Error: Passphrases do not match" >&2
+    exit 1
+fi
+
+echo "==> Encrypting archive with AES-256-CBC..."
+
+# Package into tar and encrypt via openssl using PBKDF2 key derivation
+export MY_GIT_ENC_PASS="$PASS1"
+tar -czf - -C "$TMP_STAGING" profiles keys | \
+    openssl enc -aes-256-cbc -salt -pbkdf2 -iter 100000 -pass env:MY_GIT_ENC_PASS -out "$OUTPUT_FILE"
+
+# Wipe passphrase variables from environment
+unset MY_GIT_ENC_PASS PASS1 PASS2
+
+echo "==> Export complete: $OUTPUT_FILE"
+echo ""
+echo "To decrypt and inspect this archive manually:"
+echo "  openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -in \"$OUTPUT_FILE\" | tar -tzv"

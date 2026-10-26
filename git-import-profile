@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git"
+PROFILES_DIR="$CONFIG_DIR/profiles"
+KEYS_DIR="$CONFIG_DIR/keys"
+ALLOWED_SIGNERS="$CONFIG_DIR/allowed_signers"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") <archive.tar.enc> [options | <profile1> [profile2 ...]]
+
+Inspects or restores Git profiles and SSH keys from an encrypted archive.
+
+Options:
+  -l, --list           List all profiles in the archive (name, email) without importing
+  -a, --all            Import all profiles contained in the archive
+  -h, --help           Display this help message
+
+Examples:
+  $(basename "$0") backup.tar.enc --list
+  $(basename "$0") backup.tar.enc --all
+  $(basename "$0") backup.tar.enc work personal
+EOF
+    exit 1
+}
+
+if [ "$#" -lt 2 ]; then
+    usage
+fi
+
+ARCHIVE="$1"
+shift
+
+if [ ! -f "$ARCHIVE" ]; then
+    echo "Error: Archive file not found: $ARCHIVE" >&2
+    exit 1
+fi
+
+ACTION="import"
+ALL_PROFILES=false
+TARGET_PROFILES=()
+
+# Parse arguments
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -l|--list)
+            ACTION="list"
+            shift
+            ;;
+        -a|--all)
+            ALL_PROFILES=true
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        -*)
+            echo "Error: Unknown option '$1'" >&2
+            exit 1
+            ;;
+        *)
+            TARGET_PROFILES+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Ensure staging cleanup on exit
+TMP_STAGING=$(mktemp -d)
+trap 'rm -rf "$TMP_STAGING"' EXIT
+
+# Decrypt and unpack archive into temporary directory
+read -rsp "Enter decryption passphrase: " PASS
+echo
+if [ -z "$PASS" ]; then
+    echo "Error: Passphrase cannot be empty" >&2
+    exit 1
+fi
+
+export MY_GIT_DEC_PASS="$PASS"
+if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -pass env:MY_GIT_DEC_PASS -in "$ARCHIVE" 2>/dev/null | tar -xzf - -C "$TMP_STAGING" 2>/dev/null; then
+    unset MY_GIT_DEC_PASS PASS
+    echo "Error: Failed to decrypt or unpack archive (incorrect passphrase or corrupted file)" >&2
+    exit 1
+fi
+unset MY_GIT_DEC_PASS PASS
+
+STAGED_PROFILES="$TMP_STAGING/profiles"
+STAGED_KEYS="$TMP_STAGING/keys"
+
+if [ ! -d "$STAGED_PROFILES" ]; then
+    echo "Error: Invalid archive structure (missing profiles directory)" >&2
+    exit 1
+fi
+
+# Helper: parse fields from a profile file
+parse_profile_field() {
+    local file="$1"
+    local target_key="$2"
+    local value=""
+
+    while IFS='=' read -r key val || [ -n "$key" ]; do
+        [[ "$key" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${key// }" ]] && continue
+        key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
+        val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+        if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
+
+        if [ "$key" = "$target_key" ]; then
+            value="$val"
+            break
+        fi
+    done < "$file"
+
+    echo "$value"
+}
+
+# Action 1: List contents
+if [ "$ACTION" = "list" ]; then
+    echo "==> Profiles found in archive '$ARCHIVE':"
+    echo ""
+    printf "%-20s %-25s %-30s\n" "PROFILE" "NAME" "EMAIL"
+    printf "%-20s %-25s %-30s\n" "-------" "----" "-----"
+
+    for file in "$STAGED_PROFILES"/*; do
+        [ ! -f "$file" ] && continue
+        prof=$(basename "$file")
+        p_name=$(parse_profile_field "$file" "name")
+        p_email=$(parse_profile_field "$file" "email")
+        printf "%-20s %-25s %-30s\n" "$prof" "${p_name:--}" "${p_email:--}"
+    done
+    exit 0
+fi
+
+# Action 2: Import profiles
+if [ "$ALL_PROFILES" = true ]; then
+    TARGET_PROFILES=()
+    for file in "$STAGED_PROFILES"/*; do
+        [ -f "$file" ] && TARGET_PROFILES+=("$(basename "$file")")
+    done
+elif [ "${#TARGET_PROFILES[@]}" -eq 0 ]; then
+    usage
+fi
+
+# Validate requested profiles exist in archive
+for profile in "${TARGET_PROFILES[@]}"; do
+    if [ ! -f "$STAGED_PROFILES/$profile" ]; then
+        echo "Error: Profile '$profile' not found in archive" >&2
+        exit 1
+    fi
+done
+
+# Initialize target environment
+mkdir -p "$PROFILES_DIR" "$KEYS_DIR"
+chmod 700 "$KEYS_DIR"
+touch "$ALLOWED_SIGNERS"
+chmod 644 "$ALLOWED_SIGNERS"
+
+echo "==> Importing profiles into $CONFIG_DIR..."
+
+for profile in "${TARGET_PROFILES[@]}"; do
+    src_profile="$STAGED_PROFILES/$profile"
+    dest_profile="$PROFILES_DIR/$profile"
+
+    cp "$src_profile" "$dest_profile"
+    echo "  + Imported profile: $profile"
+
+    # Identify associated keys
+    ssh_key_name=$(parse_profile_field "$src_profile" "ssh_key")
+    signing_key_name=$(parse_profile_field "$src_profile" "signing_key")
+
+    keys_to_copy=()
+    [ -n "$ssh_key_name" ] && keys_to_copy+=("$(basename "$ssh_key_name")")
+    [ -n "$signing_key_name" ] && keys_to_copy+=("$(basename "$signing_key_name")")
+
+    for key_basename in "${keys_to_copy[@]}"; do
+        # Copy private or public key
+        if [ -f "$STAGED_KEYS/$key_basename" ]; then
+            cp "$STAGED_KEYS/$key_basename" "$KEYS_DIR/$key_basename"
+            if [[ "$key_basename" == *.pub ]]; then
+                chmod 644 "$KEYS_DIR/$key_basename"
+            else
+                chmod 600 "$KEYS_DIR/$key_basename"
+            fi
+            echo "    -> Key restored: $key_basename"
+        fi
+
+        # Also copy corresponding .pub if this is a private key
+        if [ -f "$STAGED_KEYS/$key_basename.pub" ]; then
+            cp "$STAGED_KEYS/$key_basename.pub" "$KEYS_DIR/$key_basename.pub"
+            chmod 644 "$KEYS_DIR/$key_basename.pub"
+            echo "    -> Public key restored: $key_basename.pub"
+        fi
+    done
+
+    # Register public keys in allowed_signers
+    for pub_candidate in "$KEYS_DIR/$profile.pub" "$KEYS_DIR/${signing_key_name:-}"; do
+        if [ -f "$pub_candidate" ] && [[ "$pub_candidate" == *.pub ]]; then
+            raw_key=$(awk '{print $2}' "$pub_candidate")
+            if ! grep -qF "$raw_key" "$ALLOWED_SIGNERS" 2>/dev/null; then
+                echo "* namespaces=\"git\" $(cat "$pub_candidate")" >> "$ALLOWED_SIGNERS"
+                echo "    -> Registered in allowed_signers: $(basename "$pub_candidate")"
+            fi
+        fi
+    done
+done
+
+# Ensure Git global allowedSignersFile is set
+CURRENT_CFG=$(git config --global --get gpg.ssh.allowedSignersFile 2>/dev/null || true)
+if [ -z "$CURRENT_CFG" ]; then
+    git config --global gpg.ssh.allowedSignersFile "$ALLOWED_SIGNERS"
+    echo "==> Configured global gpg.ssh.allowedSignersFile -> $ALLOWED_SIGNERS"
+fi
+
+echo "==> Import completed successfully."
+
