@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROFILES_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git/profiles"
+KEYS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git/keys"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") <profile> <git-url> [target_directory] [git_flags...]
+
+Examples:
+  $(basename "$0") work git@github.com:company/repo.git
+  $(basename "$0") work git@github.com:company/repo.git custom-folder --depth 1
+EOF
+    exit 1
+}
+
+if [ "$#" -lt 2 ]; then
+    usage
+fi
+
+PROFILE="$1"
+REPO_URL="$2"
+shift 2
+
+PROFILE_FILE="$PROFILES_DIR/$PROFILE"
+
+if [ ! -f "$PROFILE_FILE" ]; then
+    echo "Error: Profile '$PROFILE' not found in $PROFILES_DIR" >&2
+    exit 1
+fi
+
+# Resolve path: checks ~/.config/my-git/keys/, custom path, or ~/.ssh/
+resolve_key_path() {
+    local raw_path="$1"
+    if [ -z "$raw_path" ]; then
+        echo ""
+    elif [[ "$raw_path" = /* ]]; then
+        echo "$raw_path"
+    elif [[ "$raw_path" == "~"* ]]; then
+        echo "${raw_path/#\~/$HOME}"
+    elif [ -f "$KEYS_DIR/$raw_path" ]; then
+        echo "$KEYS_DIR/$raw_path"
+    else
+        echo "$HOME/.ssh/$raw_path"
+    fi
+}
+
+# Verify and fix file/directory permissions (Linux & macOS compatible)
+ensure_permissions() {
+    local target="$1"
+    local expected="$2"
+
+    if [ ! -e "$target" ]; then
+        return 0
+    fi
+
+    local current=""
+    if stat -c "%a" "$target" >/dev/null 2>&1; then
+        current=$(stat -c "%a" "$target")      # GNU stat (Linux)
+    elif stat -f "%OLp" "$target" >/dev/null 2>&1; then
+        current=$(stat -f "%OLp" "$target")    # BSD stat (macOS)
+    fi
+
+    if [ -n "$current" ]; then
+        # Normalize to standard octal string
+        current=$(( 8#$current ))
+        current=$(printf "%o" "$current")
+    fi
+
+    if [ "$current" != "$expected" ]; then
+        echo "==> Notice: Incorrect permissions ($current) on '$target'. Fixing to $expected..."
+        if ! chmod "$expected" "$target" 2>/dev/null; then
+            echo "Warning: Could not change permissions for '$target'" >&2
+        fi
+    fi
+}
+
+# Check and fix keys directory permissions if it exists
+if [ -d "$KEYS_DIR" ]; then
+    ensure_permissions "$KEYS_DIR" 700
+fi
+
+# Parse profile configuration
+USER_NAME=""
+USER_EMAIL=""
+SSH_KEY=""
+SIGNING_KEY=""
+
+while IFS='=' read -r key val || [ -n "$key" ]; do
+    # Strip comments and empty lines
+    [[ "$key" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "${key// }" ]] && continue
+
+    # Trim leading/trailing whitespace
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    val="${val#"${val%%[![:space:]]*}"}"
+    val="${val%"${val##*[![:space:]]}"}"
+
+    # Strip matching surrounding quotes ("..." or '...')
+    if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then
+        val="${BASH_REMATCH[1]}"
+    fi
+
+    case "$key" in
+        name)        USER_NAME="$val" ;;
+        email)       USER_EMAIL="$val" ;;
+        ssh_key)     SSH_KEY="$val" ;;
+        signing_key) SIGNING_KEY="$val" ;;
+    esac
+done < "$PROFILE_FILE"
+
+
+if [ -z "$SSH_KEY" ]; then
+    echo "Error: 'ssh_key' is not defined in profile '$PROFILE'" >&2
+    exit 1
+fi
+
+SSH_KEY_PATH=$(resolve_key_path "$SSH_KEY")
+
+if [ ! -f "$SSH_KEY_PATH" ]; then
+    echo "Warning: SSH key file not found at $SSH_KEY_PATH" >&2
+else
+    # Private SSH keys must always be 600
+    ensure_permissions "$SSH_KEY_PATH" 600
+fi
+
+SSH_CMD="ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes"
+
+# Determine target clone directory
+if [ "$#" -gt 0 ] && [[ "$1" != -* ]]; then
+    TARGET_DIR="$1"
+else
+    TARGET_DIR=$(basename "$REPO_URL" .git)
+fi
+
+echo "==> Cloning repository using profile: $PROFILE"
+git clone -c "core.sshCommand=$SSH_CMD" "$REPO_URL" "$@"
+
+cd "$TARGET_DIR"
+
+echo "==> Applying local repository settings..."
+git config core.sshCommand "$SSH_CMD"
+
+[ -n "$USER_NAME" ]  && git config user.name "$USER_NAME"
+[ -n "$USER_EMAIL" ] && git config user.email "$USER_EMAIL"
+
+if [ -n "$SIGNING_KEY" ]; then
+    SIGNING_KEY_PATH=$(resolve_key_path "$SIGNING_KEY")
+    if [ ! -f "$SIGNING_KEY_PATH" ]; then
+        echo "Warning: Signing key file not found at $SIGNING_KEY_PATH" >&2
+    else
+        # 644 for public keys (*.pub), 600 for private keys
+        if [[ "$SIGNING_KEY_PATH" == *.pub ]]; then
+            ensure_permissions "$SIGNING_KEY_PATH" 644
+        else
+            ensure_permissions "$SIGNING_KEY_PATH" 600
+        fi
+    fi
+
+    git config gpg.format ssh
+    git config user.signingkey "$SIGNING_KEY_PATH"
+    git config commit.gpgsign true
+    git config tag.gpgsign true
+    echo "==> Commit signing enabled (Key: $SIGNING_KEY_PATH)"
+fi
+
+echo "==> Repository configured successfully. Local configuration:"
+git config --local --list | grep -E '^(user\.|core\.sshcommand|gpg\.|commit\.gpgsign)'
+
