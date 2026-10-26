@@ -1,0 +1,195 @@
+# my-git: Multi-Profile Git Manager
+
+A lightweight CLI toolset for seamless management of multiple Git identities (e.g., personal, work, freelance) on a single workstation without polluting global Git configurations.
+
+Each profile maintains its own dedicated SSH key pair, commit metadata (`user.name`, `user.email`), and SSH cryptographic signing configuration (`gpg.format ssh`), applied strictly at the repository level.
+
+---
+
+## Key Features
+
+* **Strict Repository Isolation**: Profile attributes are written exclusively to the local `.git/config`. Your global `~/.gitconfig` remains clean and unaffected.
+* **Dedicated SSH Keys**: Bypasses SSH-agent key collisions via `core.sshCommand="ssh -i ... -o IdentitiesOnly=yes"`.
+* **Zero-Friction SSH Signing**: Built-in support for native Git SSH commit and tag signing.
+* **Automatic Permissions Management**: Automatically enforces strict POSIX permissions (`700` for directories, `600` for private keys, `644` for public keys).
+* **Local Verification**: Centralized `allowed_signers` management eliminates `No principal matched` errors when running `git log --show-signature`.
+
+---
+
+## Directory Structure
+
+All profiles, keys, and signer records reside under `${XDG_CONFIG_HOME:-~/.config}/my-git`:
+
+```text
+~/.config/my-git/
+├── keys/
+│   ├── work               # Private Ed25519 key (chmod 600)
+│   ├── work.pub           # Public Ed25519 key (chmod 644)
+│   ├── personal           # Private Ed25519 key (chmod 600)
+│   └── personal.pub       # Public Ed25519 key (chmod 644)
+├── profiles/
+│   ├── work               # Profile config
+│   └── personal           # Profile config
+└── allowed_signers        # Public key registry for local signature verification
+
+```
+
+### Profile Configuration Format
+
+Profiles are simple key-value files located in `~/.config/my-git/profiles/<profile_name>`:
+
+```ini
+name = Jane Doe
+email = jane.doe@company.com
+ssh_key = work
+signing_key = work.pub
+
+```
+
+* Paths for `ssh_key` and `signing_key` can be relative to `~/.config/my-git/keys/`, `~/.ssh/`, or specified as absolute paths.
+
+---
+
+## Utilities
+
+### 1. `git-add-profile`
+
+Initializes a new profile scaffold and handles cryptographic setup.
+
+```bash
+git-add-profile <profile>
+
+```
+
+#### What it does:
+
+1. Generates an Ed25519 SSH key pair in `~/.config/my-git/keys/<profile>` (if one does not already exist).
+2. Appends the public key to `~/.config/my-git/allowed_signers` with `namespaces="git"`.
+3. Ensures `gpg.ssh.allowedSignersFile` is configured globally in Git.
+4. Generates a template file at `~/.config/my-git/profiles/<profile>` with pre-filled key paths, leaving `name` and `email` for you to define.
+
+---
+
+### 2. `git-clone`
+
+Clones a remote repository using the designated profile's SSH key and automatically configures repository-level identity and signing settings.
+
+```bash
+git-clone <profile> <git-url> [target_directory] [git_flags...]
+
+```
+
+#### Examples:
+
+```bash
+# Clone into default folder
+git-clone work git@github.com:company/project.git
+
+# Clone into a custom directory with additional Git arguments
+git-clone personal git@github.com:octocat/hello-world.git my-app --depth 1
+
+```
+
+#### What it does:
+
+1. Resolves and validates SSH key paths and permissions.
+2. Clones the remote repository using `-c core.sshCommand="ssh -i <key> -o IdentitiesOnly=yes"`.
+3. Navigates into the repository and writes local configurations:
+* `core.sshCommand`
+* `user.name` & `user.email`
+* `gpg.format = ssh`
+* `user.signingkey = <path_to_key>`
+* `commit.gpgsign = true` & `tag.gpgsign = true`
+
+
+
+---
+
+### 3. `git-init`
+
+Initializes a new local Git repository or configures an existing directory according to the selected profile.
+
+```bash
+git-init <profile> [path]
+
+```
+
+#### Examples:
+
+```bash
+# Initialize inside the current working directory
+git-init work
+
+# Initialize in a new directory
+git-init personal ./new-service
+
+```
+
+#### What it does:
+
+1. Runs `git init` on the target directory.
+2. Applies the specified profile's identity, SSH transport configuration, and commit signing flags directly to `.git/config`.
+
+---
+
+## Quickstart
+
+### 1. Installation
+
+Place the scripts in a directory included in your `$PATH` (e.g., `~/.local/bin`):
+
+```bash
+install -m 755 git-add-profile git-clone git-init ~/.local/bin/
+
+```
+
+### 2. Create a Profile
+
+```bash
+git-add-profile work
+
+```
+
+Edit `~/.config/my-git/profiles/work` to set your credentials:
+
+```ini
+name = Jane Doe
+email = jane.doe@company.com
+ssh_key = work
+signing_key = work.pub
+
+```
+
+### 3. Register the Key with GitHub / GitLab
+
+Copy your public key:
+
+```bash
+cat ~/.config/my-git/keys/work.pub
+
+```
+
+* **GitHub**: Go to **Settings** $\to$ **SSH and GPG keys** $\to$ **New SSH key**.
+* Add as **Authentication Key** (for git clone/push access).
+* Add again as **Signing Key** (to display the **Verified** badge on commits).
+
+
+
+### 4. Clone or Initialize
+
+```bash
+# Clone an existing repository
+git-clone work git@github.com:company/repo.git
+
+# Or start a fresh one
+git-init work my-app
+
+```
+
+Verify your configuration inside the repository:
+
+```bash
+git config --local --list
+
+```
+
