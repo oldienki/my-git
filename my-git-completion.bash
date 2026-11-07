@@ -95,3 +95,32 @@ _install_my_git_complete() {
 }
 complete -F _install_my_git_complete install-my-git
 
+_git_cargo_publish_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--dry-run --allow-dirty --no-verify --registry --help -h" -- "$cur") )
+    fi
+}
+complete -F _git_cargo_publish_complete git-cargo-publish
+
+_git_pypi_publish_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--repository --verbose --skip-existing --help -h" -- "$cur") )
+    else
+        COMPREPLY=( $(compgen -f -- "$cur") )
+    fi
+}
+complete -F _git_pypi_publish_complete git-pypi-publish
+
+# Completion for git-uv-publish
+_git_uv_publish_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--dry-run --publish-url --check-url --no-progress --help -h" -- "$cur") )
+    else
+        COMPREPLY=( $(compgen -f -- "$cur") )
+    fi
+}
+complete -F _git_uv_publish_complete git-uv-publish
+

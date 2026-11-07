@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROFILES_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git/profiles"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [cargo_publish_options...]
+
+Publishes a Rust crate using the Cargo token associated with the current Git repository's email.
+
+How it works:
+  1. Reads 'user.email' from the current Git repository configuration.
+  2. Finds the corresponding profile in $PROFILES_DIR matching that email.
+  3. Extracts 'cargo_token' from the profile.
+  4. Runs 'cargo publish --token <token>' forwarding all additional arguments.
+
+Examples:
+  $(basename "$0")
+  $(basename "$0") --dry-run
+  $(basename "$0") --allow-dirty
+EOF
+    exit 1
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    usage
+fi
+
+# 1. Verify cargo is installed
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "Error: 'cargo' executable not found in PATH" >&2
+    exit 1
+fi
+
+# 2. Verify current directory is inside a Git repository
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Error: Current directory is not a Git repository" >&2
+    exit 1
+fi
+
+# 3. Retrieve user.email from the repository
+REPO_EMAIL=$(git config user.email 2>/dev/null || true)
+if [ -z "$REPO_EMAIL" ]; then
+    echo "Error: 'user.email' is not configured in this repository" >&2
+    exit 1
+fi
+
+if [ ! -d "$PROFILES_DIR" ]; then
+    echo "Error: Profiles directory not found at $PROFILES_DIR" >&2
+    exit 1
+fi
+
+# Helper: parse fields from a profile file
+parse_field() {
+    local file="$1"
+    local target_key="$2"
+    local value=""
+
+    while IFS='=' read -r key val || [ -n "$key" ]; do
+        [[ "$key" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${key// }" ]] && continue
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        val="${val#"${val%%[![:space:]]*}"}"
+        val="${val%"${val##*[![:space:]]}"}"
+        if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then
+            val="${BASH_REMATCH[1]}"
+        fi
+
+        if [ "$key" = "$target_key" ]; then
+            value="$val"
+            break
+        fi
+    done < "$file"
+
+    echo "$value"
+}
+
+# 4. Search profiles for a matching email
+MATCHED_PROFILE=""
+CARGO_TOKEN=""
+
+for profile_file in "$PROFILES_DIR"/*; do
+    [ ! -f "$profile_file" ] && continue
+    prof_email=$(parse_field "$profile_file" "email")
+    if [ "$prof_email" = "$REPO_EMAIL" ]; then
+        MATCHED_PROFILE="$(basename "$profile_file")"
+        CARGO_TOKEN=$(parse_field "$profile_file" "cargo_token")
+        break
+    fi
+done
+
+if [ -z "$MATCHED_PROFILE" ]; then
+    echo "Error: No profile found matching repository email '$REPO_EMAIL' in $PROFILES_DIR" >&2
+    exit 1
+fi
+
+if [ -z "$CARGO_TOKEN" ]; then
+    echo "Error: 'cargo_token' is not defined or is empty in profile '$MATCHED_PROFILE'" >&2
+    exit 1
+fi
+
+echo "==> Publishing crate using profile '$MATCHED_PROFILE' ($REPO_EMAIL)..."
+
+# 5. Execute cargo publish forwarding any extra CLI flags
+cargo publish --token "$CARGO_TOKEN" "$@"

@@ -15,6 +15,9 @@ TOOLS=(
     "git-set-profile"
     "git-export-profile"
     "git-import-profile"
+    "git-cargo-publish"
+    "git-pypi-publish"
+    "git-uv-publish"
 )
 
 usage() {
