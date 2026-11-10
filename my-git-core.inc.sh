@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # my-git-core.inc.sh — shared library for my-git tools.
 # Source this file from sibling scripts:
 #   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,7 +36,7 @@ parse_field() {
 
     while IFS='=' read -r key val || [ -n "$key" ]; do
         [[ "$key" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${key// }" ]] && continue
+        [[ -z "${key// /}" ]] && continue
         key="${key#"${key%%[![:space:]]*}"}"
         key="${key%"${key##*[![:space:]]}"}"
         val="${val#"${val%%[![:space:]]*}"}"
@@ -47,7 +48,57 @@ parse_field() {
             value="$val"
             break
         fi
-    done < "$file"
+    done <"$file"
+
+    echo "$value"
+}
+
+# Extract a field value from a [section] of a profile file. Prints "" when
+# the section or the key is absent.
+#   $1 = profile file path, $2 = section name without brackets
+#        (e.g. "docker:ghcr.io"), $3 = key name
+parse_section_field() {
+    local file="$1"
+    local target_section="$2"
+    local target_key="$3"
+    local value=""
+    local in_section=0
+    local line key val
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        # trim leading/trailing whitespace
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+
+        if [[ "$line" =~ ^\[(.*)\]$ ]]; then
+            if [ "$in_section" -eq 1 ]; then
+                break
+            fi
+            if [ "${BASH_REMATCH[1]}" = "$target_section" ]; then
+                in_section=1
+            fi
+            continue
+        fi
+
+        [ "$in_section" -eq 0 ] && continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// /}" ]] && continue
+        [[ "$line" != *"="* ]] && continue
+
+        key="${line%%=*}"
+        val="${line#*=}"
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        val="${val#"${val%%[![:space:]]*}"}"
+        val="${val%"${val##*[![:space:]]}"}"
+        if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then
+            val="${BASH_REMATCH[1]}"
+        fi
+        if [ "$key" = "$target_key" ]; then
+            value="$val"
+            break
+        fi
+    done <"$file"
 
     echo "$value"
 }
@@ -106,8 +157,10 @@ protect_profile_tokens() {
             key="${BASH_REMATCH[1]}"
             val="${BASH_REMATCH[2]}"
 
-            key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
-            val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+            key="${key#"${key%%[![:space:]]*}"}"
+            key="${key%"${key##*[![:space:]]}"}"
+            val="${val#"${val%%[![:space:]]*}"}"
+            val="${val%"${val##*[![:space:]]}"}"
             if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then
                 val="${BASH_REMATCH[1]}"
             fi
@@ -123,7 +176,7 @@ protect_profile_tokens() {
             if [ "$is_sensitive" = true ] && [ -n "$val" ]; then
                 if [[ "$val" =~ ^secret-tool: ]] || [[ "$val" =~ ^pass: ]]; then
                     echo "  [OK] $key: already secured via external vault reference"
-                    echo "$line" >> "$tmp_file"
+                    echo "$line" >>"$tmp_file"
                 else
                     printf "%s" "$val" | secret-tool store \
                         --label="my-git $key for $profile" \
@@ -131,17 +184,17 @@ protect_profile_tokens() {
                         profile "$profile" \
                         token "$key"
 
-                    echo "$key = secret-tool:service=my-git,profile=$profile,token=$key" >> "$tmp_file"
+                    echo "$key = secret-tool:service=my-git,profile=$profile,token=$key" >>"$tmp_file"
                     echo "  [SECURED] $key: moved plaintext token to system keyring"
                     continue
                 fi
             else
-                echo "$line" >> "$tmp_file"
+                echo "$line" >>"$tmp_file"
             fi
         else
-            echo "$line" >> "$tmp_file"
+            echo "$line" >>"$tmp_file"
         fi
-    done < "$profile_file"
+    done <"$profile_file"
 
     mv "$tmp_file" "$profile_file"
     chmod 600 "$profile_file"
