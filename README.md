@@ -75,6 +75,44 @@ source ~/.config/my-git/my-git-completion.bash
 
 ---
 
+## Shell Prompt Integration (Starship)
+
+Every repository bound by `git-clone`, `git-init`, or `git-set-profile` records its
+owning profile in the local Git config as `my-git.profile`. The name can be read
+with zero latency via `git config --local --get my-git.profile`, which makes it
+ideal for a [Starship](https://starship.rs) custom module that shows the active
+identity next to the branch name.
+
+### Starship configuration (`~/.config/starship.toml`)
+
+```toml
+format = "$directory$git_branch${custom.git_profile}$git_status$character"
+
+[custom.git_profile]
+description = "Displays the active my-git profile"
+command = "git config --local --get my-git.profile"
+when = "git rev-parse --is-inside-work-tree 2>/dev/null && git config --local --get my-git.profile"
+shell = ["bash", "--noprofile", "--norc", "-c"]
+style = "bold yellow"
+symbol = "🔑 "
+format = "[$symbol$output]($style) "
+```
+
+### How it works
+
+* **`when`** — the module renders only inside a Git working tree **and** only
+  when `my-git.profile` is set, so repositories not managed by `my-git` stay clean.
+* **`command`** — a plain `git config` lookup; no extra processes, agents, or
+  file parsing, so the prompt stays fast.
+* **Bound vs. unbound repos** — repositories cloned before adopting `my-git`
+  show nothing until you run `git-set-profile <profile>` or `git-refresh`
+  inside them to write `my-git.profile`.
+
+If you keep an existing `format` string, simply insert `${custom.git_profile}`
+next to `$git_branch` instead of replacing the whole line.
+
+---
+
 ## Directory Structure
 
 All profiles, keys, and signer records reside under `${XDG_CONFIG_HOME:-~/.config}/my-git`:
