@@ -2,8 +2,16 @@
 # ~/.local/bin/git-set-profile
 set -euo pipefail
 
-PROFILES_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git/profiles"
-KEYS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git/keys"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -f "$SCRIPT_DIR/my-git-core.inc.sh" ]; then
+    echo "Error: shared library 'my-git-core.inc.sh' not found next to $(basename "$0")" >&2
+    exit 1
+fi
+# shellcheck source=my-git-core.inc.sh
+. "$SCRIPT_DIR/my-git-core.inc.sh"
+
+PROFILES_DIR="$MY_GIT_PROFILES_DIR"
+KEYS_DIR="$MY_GIT_KEYS_DIR"
 
 if [ "$#" -ne 1 ]; then
     echo "Usage: $(basename "$0") <profile>" >&2
@@ -23,35 +31,10 @@ if [ ! -f "$PROFILE_FILE" ]; then
     exit 1
 fi
 
-resolve_key_path() {
-    local raw_path="$1"
-    if [ -z "$raw_path" ]; then echo ""
-    elif [[ "$raw_path" = /* ]]; then echo "$raw_path"
-    elif [[ "$raw_path" == "~"* ]]; then echo "${raw_path/#\~/$HOME}"
-    elif [ -f "$KEYS_DIR/$raw_path" ]; then echo "$KEYS_DIR/$raw_path"
-    else echo "$HOME/.ssh/$raw_path"
-    fi
-}
-
-USER_NAME=""
-USER_EMAIL=""
-SSH_KEY=""
-SIGNING_KEY=""
-
-while IFS='=' read -r key val || [ -n "$key" ]; do
-    [[ "$key" =~ ^[[:space:]]*# ]] && continue
-    [[ -z "${key// }" ]] && continue
-    key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
-    val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
-    if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
-
-    case "$key" in
-        name)        USER_NAME="$val" ;;
-        email)       USER_EMAIL="$val" ;;
-        ssh_key)     SSH_KEY="$val" ;;
-        signing_key) SIGNING_KEY="$val" ;;
-    esac
-done < "$PROFILE_FILE"
+USER_NAME=$(parse_field "$PROFILE_FILE" "name")
+USER_EMAIL=$(parse_field "$PROFILE_FILE" "email")
+SSH_KEY=$(parse_field "$PROFILE_FILE" "ssh_key")
+SIGNING_KEY=$(parse_field "$PROFILE_FILE" "signing_key")
 
 SSH_KEY_PATH=$(resolve_key_path "$SSH_KEY")
 SSH_CMD="ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes"
