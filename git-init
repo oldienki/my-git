@@ -142,6 +142,7 @@ cd "$TARGET_DIR"
 
 echo "==> Applying local repository settings for profile: $PROFILE"
 git config core.sshCommand "$SSH_CMD"
+git config my-git.profile "$PROFILE"
 
 [ -n "$USER_NAME" ]  && git config user.name "$USER_NAME"
 [ -n "$USER_EMAIL" ] && git config user.email "$USER_EMAIL"
@@ -166,4 +167,4 @@ if [ -n "$SIGNING_KEY" ]; then
 fi
 
 echo "==> Repository initialized and configured successfully. Local configuration:"
-git config --local --list | grep -E '^(user\.|core\.sshcommand|gpg\.|commit\.gpgsign)'
+git config --local --list | grep -E '^(user\.|core\.sshcommand|gpg\.|commit\.gpgsign|my-git\.)'
