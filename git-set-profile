@@ -41,6 +41,7 @@ SSH_CMD="ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes"
 
 echo "==> Applying profile '$PROFILE' to repository at $(pwd)..."
 git config core.sshCommand "$SSH_CMD"
+git config my-git.profile "$PROFILE"
 [ -n "$USER_NAME" ]  && git config user.name "$USER_NAME"
 [ -n "$USER_EMAIL" ] && git config user.email "$USER_EMAIL"
 

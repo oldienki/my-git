@@ -37,6 +37,7 @@ teardown() {
     run "$REPO_ROOT/git-set-profile" plain
     [ "$status" -eq 0 ]
     [ -z "$(git config gpg.format 2>/dev/null || true)" ]
+    [ "$(git config my-git.profile)" = "plain" ]
 }
 
 @test "set-profile errors on missing profile" {
