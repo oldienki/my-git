@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Generic capture stub: records name, argv, and selected env vars to $CAPTURE_LOG.
+# Install as cargo, twine, uv, docker under a shadow bin dir.
+# For "docker login ... --password-stdin" reads stdin into the log.
+name="$(basename "$0")"
+{
+    printf "%s | argv: %s\n" "$name" "$*"
+    printf "%s | CARGO_REGISTRY_TOKEN=%s\n" "$name" "${CARGO_REGISTRY_TOKEN:-}"
+    printf "%s | TWINE_USERNAME=%s TWINE_PASSWORD=%s\n" "$name" "${TWINE_USERNAME:-}" "${TWINE_PASSWORD:-}"
+    printf "%s | UV_PUBLISH_TOKEN=%s\n" "$name" "${UV_PUBLISH_TOKEN:-}"
+    if [ "$name" = "docker" ] && [ "${1:-}" = "login" ]; then
+        pw="$(cat)"
+        printf "docker | login-password=%s\n" "$pw"
+    fi
+} >> "${CAPTURE_LOG:-/dev/null}"

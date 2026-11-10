@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROFILES_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git/profiles"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -f "$SCRIPT_DIR/my-git-core.inc.sh" ]; then
+    echo "Error: shared library 'my-git-core.inc.sh' not found next to $(basename "$0")" >&2
+    exit 1
+fi
+# shellcheck source=my-git-core.inc.sh
+. "$SCRIPT_DIR/my-git-core.inc.sh"
+
+PROFILES_DIR="$MY_GIT_PROFILES_DIR"
 
 usage() {
     cat <<EOF
@@ -52,45 +60,13 @@ if [ ! -d "$PROFILES_DIR" ]; then
     exit 1
 fi
 
-# Helper: parse fields from a profile file
-parse_field() {
-    local file="$1"
-    local target_key="$2"
-    local value=""
-
-    while IFS='=' read -r key val || [ -n "$key" ]; do
-        [[ "$key" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${key// }" ]] && continue
-        key="${key#"${key%%[![:space:]]*}"}"
-        key="${key%"${key##*[![:space:]]}"}"
-        val="${val#"${val%%[![:space:]]*}"}"
-        val="${val%"${val##*[![:space:]]}"}"
-        if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then
-            val="${BASH_REMATCH[1]}"
-        fi
-
-        if [ "$key" = "$target_key" ]; then
-            value="$val"
-            break
-        fi
-    done < "$file"
-
-    echo "$value"
-}
-
 # 4. Search profiles for a matching email
 MATCHED_PROFILE=""
 CARGO_TOKEN=""
 
-for profile_file in "$PROFILES_DIR"/*; do
-    [ ! -f "$profile_file" ] && continue
-    prof_email=$(parse_field "$profile_file" "email")
-    if [ "$prof_email" = "$REPO_EMAIL" ]; then
-        MATCHED_PROFILE="$(basename "$profile_file")"
-        CARGO_TOKEN=$(parse_field "$profile_file" "cargo_token")
-        break
-    fi
-done
+if MATCHED_PROFILE=$(find_profile_by_email "$REPO_EMAIL") && [ -n "$MATCHED_PROFILE" ]; then
+    CARGO_TOKEN=$(resolve_token "$(parse_field "$PROFILES_DIR/$MATCHED_PROFILE" "cargo_token")")
+fi
 
 if [ -z "$MATCHED_PROFILE" ]; then
     echo "Error: No profile found matching repository email '$REPO_EMAIL' in $PROFILES_DIR" >&2

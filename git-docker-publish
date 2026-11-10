@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROFILES_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git/profiles"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -f "$SCRIPT_DIR/my-git-core.inc.sh" ]; then
+    echo "Error: shared library 'my-git-core.inc.sh' not found next to $(basename "$0")" >&2
+    exit 1
+fi
+# shellcheck source=my-git-core.inc.sh
+. "$SCRIPT_DIR/my-git-core.inc.sh"
+
+PROFILES_DIR="$MY_GIT_PROFILES_DIR"
 
 usage() {
     cat <<EOF
@@ -83,40 +91,18 @@ if [ -z "$REPO_EMAIL" ]; then
     exit 1
 fi
 
-# Helper: parse fields from a profile file
-parse_field() {
-    local file="$1"
-    local target_key="$2"
-    local value=""
-
-    while IFS='=' read -r key val || [ -n "$key" ]; do
-        [[ "$key" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${key// }" ]] && continue
-        key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
-        val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
-        if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
-        if [ "$key" = "$target_key" ]; then value="$val"; break; fi
-    done < "$file"
-    echo "$value"
-}
-
 # 3. Match profile
 MATCHED_PROFILE=""
 DOCKER_USER=""
 DOCKER_TOKEN=""
 DOCKER_REGISTRY=""
 
-for profile_file in "$PROFILES_DIR"/*; do
-    [ ! -f "$profile_file" ] && continue
-    prof_email=$(parse_field "$profile_file" "email")
-    if [ "$prof_email" = "$REPO_EMAIL" ]; then
-        MATCHED_PROFILE="$(basename "$profile_file")"
-        DOCKER_USER=$(parse_field "$profile_file" "docker_user")
-        DOCKER_TOKEN=$(parse_field "$profile_file" "docker_token")
-        DOCKER_REGISTRY=$(parse_field "$profile_file" "docker_registry")
-        break
-    fi
-done
+if MATCHED_PROFILE=$(find_profile_by_email "$REPO_EMAIL") && [ -n "$MATCHED_PROFILE" ]; then
+    profile_file="$PROFILES_DIR/$MATCHED_PROFILE"
+    DOCKER_USER=$(parse_field "$profile_file" "docker_user")
+    DOCKER_TOKEN=$(resolve_token "$(parse_field "$profile_file" "docker_token")")
+    DOCKER_REGISTRY=$(parse_field "$profile_file" "docker_registry")
+fi
 
 if [ -z "$MATCHED_PROFILE" ]; then
     echo "Error: No profile found matching repository email '$REPO_EMAIL'" >&2
