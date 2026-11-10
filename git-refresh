@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -f "$SCRIPT_DIR/my-git-core.inc.sh" ]; then
+    echo "Error: shared library 'my-git-core.inc.sh' not found next to $(basename "$0")" >&2
+    exit 1
+fi
+# shellcheck source=my-git-core.inc.sh
+. "$SCRIPT_DIR/my-git-core.inc.sh"
+
+PROFILES_DIR="$MY_GIT_PROFILES_DIR"
+ALLOWED_SIGNERS="$MY_GIT_CONFIG_DIR/allowed_signers"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [options]
+
+Synchronizes the current repository's Git configuration with its linked profile.
+Resolves the profile via 'my-git.profile' or by matching the configured 'user.email'.
+Updates outdated parameters, removes settings dropped from the profile, and
+writes 'my-git.profile' to bind the repository.
+
+Options:
+  -f, --force    Re-apply all settings even if values match
+  -h, --help     Display this help message
+EOF
+    exit 1
+}
+
+FORCE=false
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -f|--force) FORCE=true; shift ;;
+        -h|--help)  usage ;;
+        *) echo "Error: Unknown option '$1'" >&2; exit 1 ;;
+    esac
+done
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Error: Current directory is not a Git repository" >&2
+    exit 1
+fi
+
+if [ ! -d "$PROFILES_DIR" ]; then
+    echo "Error: Profiles directory not found at $PROFILES_DIR" >&2
+    exit 1
+fi
+
+# Resolve the bound profile: explicit key first, then user.email fallback.
+MATCHED_PROFILE=""
+PROFILE_KEY=$(git config --local --get my-git.profile 2>/dev/null || true)
+if [ -n "$PROFILE_KEY" ] && [ -f "$PROFILES_DIR/$PROFILE_KEY" ]; then
+    MATCHED_PROFILE="$PROFILE_KEY"
+fi
+
+if [ -z "$MATCHED_PROFILE" ]; then
+    REPO_EMAIL=$(git config --get user.email 2>/dev/null || true)
+    if [ -n "$REPO_EMAIL" ]; then
+        MATCHED_PROFILE=$(find_profile_by_email "$REPO_EMAIL" || true)
+        if [ -n "$MATCHED_PROFILE" ]; then
+            echo "Notice: bound repository to profile '$MATCHED_PROFILE' via user.email"
+        fi
+    fi
+fi
+
+if [ -z "$MATCHED_PROFILE" ]; then
+    echo "Error: No matching profile found for this repository." >&2
+    echo "Hint: Link a profile manually with 'git-set-profile <profile>'." >&2
+    exit 1
+fi
+
+PROFILE_FILE="$PROFILES_DIR/$MATCHED_PROFILE"
+echo "==> Synchronizing configuration using profile: $MATCHED_PROFILE"
+
+PROF_NAME=$(parse_field "$PROFILE_FILE" "name")
+PROF_EMAIL=$(parse_field "$PROFILE_FILE" "email")
+PROF_SSH_KEY=$(parse_field "$PROFILE_FILE" "ssh_key")
+PROF_SIGNING_KEY=$(parse_field "$PROFILE_FILE" "signing_key")
+
+# Set a local config key when the value differs or --force is given.
+sync_git_config() {
+    local key="$1"
+    local desired="$2"
+    local current
+    current=$(git config --local --get "$key" 2>/dev/null || true)
+
+    if [ "$current" != "$desired" ] || [ "$FORCE" = true ]; then
+        git config --local "$key" "$desired"
+        if [ -z "$current" ]; then
+            echo "  [ADDED]   $key = $desired"
+        else
+            echo "  [UPDATED] $key: '$current' -> '$desired'"
+        fi
+    else
+        echo "  [OK]      $key = $desired"
+    fi
+}
+
+# Unset a local config key when present.
+unsync_git_config() {
+    local key="$1"
+    local current
+    current=$(git config --local --get "$key" 2>/dev/null || true)
+
+    if [ -n "$current" ]; then
+        git config --local --unset "$key"
+        echo "  [REMOVED] $key (was '$current')"
+    fi
+}
+
+[ -n "$PROF_NAME" ]  && sync_git_config "user.name" "$PROF_NAME"
+[ -n "$PROF_EMAIL" ] && sync_git_config "user.email" "$PROF_EMAIL"
+sync_git_config "my-git.profile" "$MATCHED_PROFILE"
+
+if [ -n "$PROF_SSH_KEY" ]; then
+    SSH_KEY_PATH=$(resolve_key_path "$PROF_SSH_KEY")
+    if [ -f "$SSH_KEY_PATH" ]; then
+        sync_git_config "core.sshCommand" "ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes"
+    else
+        echo "  [WARNING] SSH key '$PROF_SSH_KEY' referenced in profile does not exist" >&2
+    fi
+else
+    unsync_git_config "core.sshCommand"
+fi
+
+if [ -n "$PROF_SIGNING_KEY" ]; then
+    SIGNING_KEY_PATH=$(resolve_key_path "$PROF_SIGNING_KEY")
+    if [ -f "$SIGNING_KEY_PATH" ]; then
+        sync_git_config "gpg.format" "ssh"
+        sync_git_config "user.signingkey" "$SIGNING_KEY_PATH"
+        sync_git_config "commit.gpgsign" "true"
+        sync_git_config "tag.gpgsign" "true"
+        if [ -f "$ALLOWED_SIGNERS" ]; then
+            sync_git_config "gpg.ssh.allowedSignersFile" "$ALLOWED_SIGNERS"
+        fi
+    else
+        echo "  [WARNING] Signing key '$PROF_SIGNING_KEY' referenced in profile does not exist" >&2
+    fi
+else
+    unsync_git_config "gpg.format"
+    unsync_git_config "user.signingkey"
+    unsync_git_config "commit.gpgsign"
+    unsync_git_config "tag.gpgsign"
+    unsync_git_config "gpg.ssh.allowedSignersFile"
+fi
+
+echo "==> Repository successfully refreshed."
