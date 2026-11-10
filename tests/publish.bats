@@ -27,7 +27,7 @@ setup() {
     git -C "$REPO_DIR" commit -q --allow-empty -m init
 
     printf 'email = work@example.com\ncargo_token = secret-tool:service=my-git,profile=work,token=cargo_token\npypi_token = secret-tool:service=my-git,profile=work,token=pypi_token\ndocker_user = wu\ndocker_token = secret-tool:service=my-git,profile=work,token=docker_token\n' \
-        > "$XDG_CONFIG_HOME/my-git/profiles/work"
+        >"$XDG_CONFIG_HOME/my-git/profiles/work"
 }
 
 teardown() {
@@ -35,6 +35,7 @@ teardown() {
 }
 
 @test "cargo-publish resolves secret-tool ref into CARGO_REGISTRY_TOKEN" {
+    cd "$REPO_DIR"
     run "$REPO_ROOT/git-cargo-publish" --dry-run
     [ "$status" -eq 0 ]
     grep -q 'cargo | CARGO_REGISTRY_TOKEN=keyring-secret-1' "$CAPTURE_LOG"
@@ -42,7 +43,8 @@ teardown() {
 
 @test "cargo-publish works with plaintext token too" {
     printf 'email = work@example.com\ncargo_token = plain-tok\n' \
-        > "$XDG_CONFIG_HOME/my-git/profiles/work"
+        >"$XDG_CONFIG_HOME/my-git/profiles/work"
+    cd "$REPO_DIR"
     run "$REPO_ROOT/git-cargo-publish" --dry-run
     [ "$status" -eq 0 ]
     grep -q 'cargo | CARGO_REGISTRY_TOKEN=plain-tok' "$CAPTURE_LOG"
@@ -50,6 +52,7 @@ teardown() {
 
 @test "cargo-publish errors when lookup returns empty" {
     export STUB_SECRET_MISSING=1
+    cd "$REPO_DIR"
     run "$REPO_ROOT/git-cargo-publish" --dry-run
     [ "$status" -ne 0 ]
     [[ "$output" == *"cargo_token"* ]]
@@ -75,6 +78,74 @@ teardown() {
     run "$REPO_ROOT/git-docker-publish" img:1
     [ "$status" -eq 0 ]
     grep -q 'docker | login-password=keyring-secret-1' "$CAPTURE_LOG"
+    grep -q 'docker | argv: login docker.io --username wu --password-stdin' "$CAPTURE_LOG"
+}
+
+@test "docker-publish uses section credentials for image-prefixed registry" {
+    printf 'email = work@example.com\ndocker_user = wu\ndocker_token = flat-tok\n\n[docker:ghcr.io]\nuser = octocat\ntoken = ghp_tok\n' \
+        >"$XDG_CONFIG_HOME/my-git/profiles/work"
+    cd "$REPO_DIR"
+    run "$REPO_ROOT/git-docker-publish" ghcr.io/org/img:1
+    [ "$status" -eq 0 ]
+    grep -q 'docker | login-password=ghp_tok' "$CAPTURE_LOG"
+    grep -q 'docker | argv: login ghcr.io --username octocat --password-stdin' "$CAPTURE_LOG"
+}
+
+@test "docker-publish falls back to flat creds when registry has no section" {
+    printf 'email = work@example.com\ndocker_user = wu\ndocker_token = flat-tok\n\n[docker:ghcr.io]\nuser = octocat\ntoken = ghp_tok\n' \
+        >"$XDG_CONFIG_HOME/my-git/profiles/work"
+    cd "$REPO_DIR"
+    run "$REPO_ROOT/git-docker-publish" img:1
+    [ "$status" -eq 0 ]
+    grep -q 'docker | login-password=flat-tok' "$CAPTURE_LOG"
+    grep -q 'docker | argv: login docker.io --username wu --password-stdin' "$CAPTURE_LOG"
+}
+
+@test "docker-publish selects section via -r override" {
+    printf 'email = work@example.com\ndocker_user = wu\ndocker_token = flat-tok\n\n[docker:quay.io]\nuser = robot\ntoken = quay_tok\n' \
+        >"$XDG_CONFIG_HOME/my-git/profiles/work"
+    cd "$REPO_DIR"
+    run "$REPO_ROOT/git-docker-publish" -r quay.io img:1
+    [ "$status" -eq 0 ]
+    grep -q 'docker | login-password=quay_tok' "$CAPTURE_LOG"
+    grep -q 'docker | argv: login quay.io --username robot --password-stdin' "$CAPTURE_LOG"
+}
+
+@test "docker-publish resolves secret-tool ref inside section" {
+    printf 'email = work@example.com\ndocker_user = wu\ndocker_token = flat-tok\n\n[docker:ghcr.io]\nuser = octocat\ntoken = secret-tool:service=my-git,profile=work,token=docker_ghcr_io\n' \
+        >"$XDG_CONFIG_HOME/my-git/profiles/work"
+    cd "$REPO_DIR"
+    run "$REPO_ROOT/git-docker-publish" ghcr.io/org/img:1
+    [ "$status" -eq 0 ]
+    grep -q 'docker | login-password=keyring-secret-1' "$CAPTURE_LOG"
+    grep -q 'docker | argv: login ghcr.io --username octocat --password-stdin' "$CAPTURE_LOG"
+}
+
+@test "docker-publish warns and inherits flat token on partial section" {
+    printf 'email = work@example.com\ndocker_user = wu\ndocker_token = flat-tok\n\n[docker:ghcr.io]\nuser = octocat\n' \
+        >"$XDG_CONFIG_HOME/my-git/profiles/work"
+    cd "$REPO_DIR"
+    run "$REPO_ROOT/git-docker-publish" ghcr.io/org/img:1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Warning"* ]]
+    grep -q 'docker | login-password=flat-tok' "$CAPTURE_LOG"
+    grep -q 'docker | argv: login ghcr.io --username octocat --password-stdin' "$CAPTURE_LOG"
+}
+
+@test "docker-publish -u override applies after section lookup" {
+    printf 'email = work@example.com\ndocker_user = wu\ndocker_token = flat-tok\n\n[docker:ghcr.io]\nuser = octocat\ntoken = ghp_tok\n' \
+        >"$XDG_CONFIG_HOME/my-git/profiles/work"
+    cd "$REPO_DIR"
+    run "$REPO_ROOT/git-docker-publish" -u cliuser ghcr.io/org/img:1
+    [ "$status" -eq 0 ]
+    grep -q 'docker | argv: login ghcr.io --username cliuser --password-stdin' "$CAPTURE_LOG"
+    grep -q 'docker | login-password=ghp_tok' "$CAPTURE_LOG"
+}
+
+@test "docker-publish flat-only profile unchanged (regression)" {
+    cd "$REPO_DIR"
+    run "$REPO_ROOT/git-docker-publish" img:1
+    [ "$status" -eq 0 ]
     grep -q 'docker | argv: login docker.io --username wu --password-stdin' "$CAPTURE_LOG"
 }
 

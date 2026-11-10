@@ -43,23 +43,37 @@ EXTRA_ARGS=()
 # Parse CLI arguments
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -r|--registry)
-            [ -z "${2:-}" ] && { echo "Error: --registry requires an argument" >&2; exit 1; }
-            REGISTRY_OVERRIDE="$2"; shift 2 ;;
-        -u|--user)
-            [ -z "${2:-}" ] && { echo "Error: --user requires an argument" >&2; exit 1; }
-            USER_OVERRIDE="$2"; shift 2 ;;
-        -h|--help)
-            usage ;;
-        -*)
-            EXTRA_ARGS+=("$1"); shift ;;
-        *)
-            if [ -z "$IMAGE" ]; then
-                IMAGE="$1"
-            else
-                EXTRA_ARGS+=("$1")
-            fi
-            shift ;;
+    -r | --registry)
+        [ -z "${2:-}" ] && {
+            echo "Error: --registry requires an argument" >&2
+            exit 1
+        }
+        REGISTRY_OVERRIDE="$2"
+        shift 2
+        ;;
+    -u | --user)
+        [ -z "${2:-}" ] && {
+            echo "Error: --user requires an argument" >&2
+            exit 1
+        }
+        USER_OVERRIDE="$2"
+        shift 2
+        ;;
+    -h | --help)
+        usage
+        ;;
+    -*)
+        EXTRA_ARGS+=("$1")
+        shift
+        ;;
+    *)
+        if [ -z "$IMAGE" ]; then
+            IMAGE="$1"
+        else
+            EXTRA_ARGS+=("$1")
+        fi
+        shift
+        ;;
     esac
 done
 
@@ -100,7 +114,7 @@ DOCKER_REGISTRY=""
 if MATCHED_PROFILE=$(find_profile_by_email "$REPO_EMAIL") && [ -n "$MATCHED_PROFILE" ]; then
     profile_file="$PROFILES_DIR/$MATCHED_PROFILE"
     DOCKER_USER=$(parse_field "$profile_file" "docker_user")
-    DOCKER_TOKEN=$(resolve_token "$(parse_field "$profile_file" "docker_token")")
+    DOCKER_TOKEN=$(parse_field "$profile_file" "docker_token")
     DOCKER_REGISTRY=$(parse_field "$profile_file" "docker_registry")
 fi
 
@@ -109,19 +123,7 @@ if [ -z "$MATCHED_PROFILE" ]; then
     exit 1
 fi
 
-# Apply overrides
-[ -n "$USER_OVERRIDE" ] && DOCKER_USER="$USER_OVERRIDE"
 [ -n "$REGISTRY_OVERRIDE" ] && DOCKER_REGISTRY="$REGISTRY_OVERRIDE"
-
-if [ -z "$DOCKER_TOKEN" ]; then
-    echo "Error: 'docker_token' is not defined in profile '$MATCHED_PROFILE'" >&2
-    exit 1
-fi
-
-if [ -z "$DOCKER_USER" ]; then
-    echo "Error: 'docker_user' is not defined in profile '$MATCHED_PROFILE'" >&2
-    exit 1
-fi
 
 # Determine registry target from image prefix or profile
 TARGET_REGISTRY="$DOCKER_REGISTRY"
@@ -129,6 +131,38 @@ if [[ "$IMAGE" =~ ^([^/:]+\.[^/:]+)/ ]]; then
     TARGET_REGISTRY="${BASH_REMATCH[1]}"
 fi
 TARGET_REGISTRY="${TARGET_REGISTRY:-docker.io}"
+
+# Per-registry credentials from [docker:<registry>] section, flat keys as fallback
+SECTION="docker:$TARGET_REGISTRY"
+SECTION_USER=$(parse_section_field "$profile_file" "$SECTION" "user")
+SECTION_TOKEN=$(parse_section_field "$profile_file" "$SECTION" "token")
+
+if [ -n "$SECTION_USER" ] || [ -n "$SECTION_TOKEN" ]; then
+    if [ -z "$SECTION_USER" ]; then
+        echo "Warning: section [$SECTION] has no 'user'; inheriting 'docker_user' from profile '$MATCHED_PROFILE'" >&2
+    fi
+    if [ -z "$SECTION_TOKEN" ]; then
+        echo "Warning: section [$SECTION] has no 'token'; inheriting 'docker_token' from profile '$MATCHED_PROFILE'" >&2
+    fi
+fi
+
+[ -n "$SECTION_USER" ] && DOCKER_USER="$SECTION_USER"
+[ -n "$SECTION_TOKEN" ] && DOCKER_TOKEN="$SECTION_TOKEN"
+
+DOCKER_TOKEN=$(resolve_token "$DOCKER_TOKEN")
+
+# Apply overrides
+[ -n "$USER_OVERRIDE" ] && DOCKER_USER="$USER_OVERRIDE"
+
+if [ -z "$DOCKER_TOKEN" ]; then
+    echo "Error: 'docker_token' is not defined in profile '$MATCHED_PROFILE' for registry '$TARGET_REGISTRY'" >&2
+    exit 1
+fi
+
+if [ -z "$DOCKER_USER" ]; then
+    echo "Error: 'docker_user' is not defined in profile '$MATCHED_PROFILE' for registry '$TARGET_REGISTRY'" >&2
+    exit 1
+fi
 
 # 4. Create ephemeral isolated DOCKER_CONFIG
 TMP_DOCKER_DIR=$(mktemp -d)
@@ -140,9 +174,9 @@ echo "==> Authenticating to $TARGET_REGISTRY using profile '$MATCHED_PROFILE' ($
 echo "$DOCKER_TOKEN" | "$DOCKER_BIN" login "$TARGET_REGISTRY" \
     --username "$DOCKER_USER" \
     --password-stdin >/dev/null 2>&1 || {
-        echo "Error: Failed to authenticate to $TARGET_REGISTRY" >&2
-        exit 1
-    }
+    echo "Error: Failed to authenticate to $TARGET_REGISTRY" >&2
+    exit 1
+}
 
 echo "==> Pushing $IMAGE..."
 "$DOCKER_BIN" push "$IMAGE" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
