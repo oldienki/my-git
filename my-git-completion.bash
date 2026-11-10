@@ -124,3 +124,38 @@ _git_uv_publish_complete() {
 }
 complete -F _git_uv_publish_complete git-uv-publish
 
+# Completion for git-docker-publish
+_git_docker_publish_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    # Suggest popular registries after -r / --registry
+    if [[ "$prev" == "-r" || "$prev" == "--registry" ]]; then
+        COMPREPLY=( $(compgen -W "docker.io ghcr.io registry.gitlab.com" -- "$cur") )
+        return 0
+    fi
+
+    # Do not complete username argument
+    if [[ "$prev" == "-u" || "$prev" == "--user" ]]; then
+        return 0
+    fi
+
+    # Suggest CLI flags
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--registry -r --user -u --all-tags -a --quiet -q --help -h" -- "$cur") )
+        return 0
+    fi
+
+    # Suggest existing local image tags from docker/podman
+    local images=""
+    if command -v docker >/dev/null 2>&1; then
+        images=$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -v '<none>')
+    elif command -v podman >/dev/null 2>&1; then
+        images=$(podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -v '<none>')
+    fi
+
+    if [ -n "$images" ]; then
+        COMPREPLY=( $(compgen -W "$images" -- "$cur") )
+    fi
+}
+complete -F _git_docker_publish_complete git-docker-publish

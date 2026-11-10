@@ -13,12 +13,13 @@ How it works:
   1. Reads 'user.email' from the current Git repository configuration.
   2. Finds the corresponding profile in $PROFILES_DIR matching that email.
   3. Extracts 'cargo_token' from the profile.
-  4. Runs 'cargo publish --token <token>' forwarding all additional arguments.
+  4. Passes the token via CARGO_REGISTRY_TOKEN (or CARGO_REGISTRIES_<NAME>_TOKEN)
+     without exposing it in CLI arguments.
 
 Examples:
   $(basename "$0")
   $(basename "$0") --dry-run
-  $(basename "$0") --allow-dirty
+  $(basename "$0") --registry my-registry
 EOF
     exit 1
 }
@@ -101,7 +102,26 @@ if [ -z "$CARGO_TOKEN" ]; then
     exit 1
 fi
 
+# 5. Detect if a custom registry is specified in CLI arguments
+CUSTOM_REGISTRY=""
+args=("$@")
+for i in "${!args[@]}"; do
+    if [[ "${args[i]}" == "--registry" && $((i+1)) -lt ${#args[@]} ]]; then
+        CUSTOM_REGISTRY="${args[i+1]}"
+    elif [[ "${args[i]}" =~ ^--registry=(.+) ]]; then
+        CUSTOM_REGISTRY="${BASH_REMATCH[1]}"
+    fi
+done
+
 echo "==> Publishing crate using profile '$MATCHED_PROFILE' ($REPO_EMAIL)..."
 
-# 5. Execute cargo publish forwarding any extra CLI flags
-cargo publish --token "$CARGO_TOKEN" "$@"
+# 6. Set appropriate token environment variable and run publish
+if [ -n "$CUSTOM_REGISTRY" ]; then
+    REG_ENV="CARGO_REGISTRIES_${CUSTOM_REGISTRY^^}_TOKEN"
+    REG_ENV="${REG_ENV//-/_}"
+    export "$REG_ENV"="$CARGO_TOKEN"
+    cargo publish "$@"
+    unset "$REG_ENV"
+else
+    CARGO_REGISTRY_TOKEN="$CARGO_TOKEN" cargo publish "$@"
+fi

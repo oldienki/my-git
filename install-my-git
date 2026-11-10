@@ -18,6 +18,7 @@ TOOLS=(
     "git-cargo-publish"
     "git-pypi-publish"
     "git-uv-publish"
+    "git-docker-publish"
 )
 
 usage() {

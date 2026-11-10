@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROFILES_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git/profiles"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [options] <image_name[:tag]> [docker_push_options...]
+
+Publishes a Docker/OCI image using credentials associated with the current Git repository's email.
+Isolates Docker authentication in an ephemeral session, leaving ~/.docker/config.json untouched.
+
+Options:
+  -r, --registry <url>  Override the target registry (e.g. ghcr.io, docker.io)
+  -u, --user <username> Override the registry username
+  -h, --help            Display this help message
+
+Examples:
+  $(basename "$0") my-org/my-app:1.0.0
+  $(basename "$0") ghcr.io/my-org/my-app:latest
+  $(basename "$0") -r ghcr.io my-app:latest
+EOF
+    exit 1
+}
+
+if [ "$#" -eq 0 ]; then
+    usage
+fi
+
+REGISTRY_OVERRIDE=""
+USER_OVERRIDE=""
+IMAGE=""
+EXTRA_ARGS=()
+
+# Parse CLI arguments
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -r|--registry)
+            [ -z "${2:-}" ] && { echo "Error: --registry requires an argument" >&2; exit 1; }
+            REGISTRY_OVERRIDE="$2"; shift 2 ;;
+        -u|--user)
+            [ -z "${2:-}" ] && { echo "Error: --user requires an argument" >&2; exit 1; }
+            USER_OVERRIDE="$2"; shift 2 ;;
+        -h|--help)
+            usage ;;
+        -*)
+            EXTRA_ARGS+=("$1"); shift ;;
+        *)
+            if [ -z "$IMAGE" ]; then
+                IMAGE="$1"
+            else
+                EXTRA_ARGS+=("$1")
+            fi
+            shift ;;
+    esac
+done
+
+if [ -z "$IMAGE" ]; then
+    echo "Error: Target image name is required" >&2
+    exit 1
+fi
+
+# 1. Verify docker or podman is installed
+DOCKER_BIN=""
+if command -v docker >/dev/null 2>&1; then
+    DOCKER_BIN="docker"
+elif command -v podman >/dev/null 2>&1; then
+    DOCKER_BIN="podman"
+else
+    echo "Error: Neither 'docker' nor 'podman' executable found in PATH" >&2
+    exit 1
+fi
+
+# 2. Verify git repository and extract user.email
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Error: Current directory is not a Git repository" >&2
+    exit 1
+fi
+
+REPO_EMAIL=$(git config user.email 2>/dev/null || true)
+if [ -z "$REPO_EMAIL" ]; then
+    echo "Error: 'user.email' is not configured in this repository" >&2
+    exit 1
+fi
+
+# Helper: parse fields from a profile file
+parse_field() {
+    local file="$1"
+    local target_key="$2"
+    local value=""
+
+    while IFS='=' read -r key val || [ -n "$key" ]; do
+        [[ "$key" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${key// }" ]] && continue
+        key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
+        val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+        if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
+        if [ "$key" = "$target_key" ]; then value="$val"; break; fi
+    done < "$file"
+    echo "$value"
+}
+
+# 3. Match profile
+MATCHED_PROFILE=""
+DOCKER_USER=""
+DOCKER_TOKEN=""
+DOCKER_REGISTRY=""
+
+for profile_file in "$PROFILES_DIR"/*; do
+    [ ! -f "$profile_file" ] && continue
+    prof_email=$(parse_field "$profile_file" "email")
+    if [ "$prof_email" = "$REPO_EMAIL" ]; then
+        MATCHED_PROFILE="$(basename "$profile_file")"
+        DOCKER_USER=$(parse_field "$profile_file" "docker_user")
+        DOCKER_TOKEN=$(parse_field "$profile_file" "docker_token")
+        DOCKER_REGISTRY=$(parse_field "$profile_file" "docker_registry")
+        break
+    fi
+done
+
+if [ -z "$MATCHED_PROFILE" ]; then
+    echo "Error: No profile found matching repository email '$REPO_EMAIL'" >&2
+    exit 1
+fi
+
+# Apply overrides
+[ -n "$USER_OVERRIDE" ] && DOCKER_USER="$USER_OVERRIDE"
+[ -n "$REGISTRY_OVERRIDE" ] && DOCKER_REGISTRY="$REGISTRY_OVERRIDE"
+
+if [ -z "$DOCKER_TOKEN" ]; then
+    echo "Error: 'docker_token' is not defined in profile '$MATCHED_PROFILE'" >&2
+    exit 1
+fi
+
+if [ -z "$DOCKER_USER" ]; then
+    echo "Error: 'docker_user' is not defined in profile '$MATCHED_PROFILE'" >&2
+    exit 1
+fi
+
+# Determine registry target from image prefix or profile
+TARGET_REGISTRY="$DOCKER_REGISTRY"
+if [[ "$IMAGE" =~ ^([^/:]+\.[^/:]+)/ ]]; then
+    TARGET_REGISTRY="${BASH_REMATCH[1]}"
+fi
+TARGET_REGISTRY="${TARGET_REGISTRY:-docker.io}"
+
+# 4. Create ephemeral isolated DOCKER_CONFIG
+TMP_DOCKER_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DOCKER_DIR"' EXIT
+
+export DOCKER_CONFIG="$TMP_DOCKER_DIR"
+
+echo "==> Authenticating to $TARGET_REGISTRY using profile '$MATCHED_PROFILE' ($DOCKER_USER)..."
+echo "$DOCKER_TOKEN" | "$DOCKER_BIN" login "$TARGET_REGISTRY" \
+    --username "$DOCKER_USER" \
+    --password-stdin >/dev/null 2>&1 || {
+        echo "Error: Failed to authenticate to $TARGET_REGISTRY" >&2
+        exit 1
+    }
+
+echo "==> Pushing $IMAGE..."
+"$DOCKER_BIN" push "$IMAGE" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
+
+echo "==> Successfully pushed $IMAGE. Ephemeral auth session cleaned up."
