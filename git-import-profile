@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/my-git"
-PROFILES_DIR="$CONFIG_DIR/profiles"
-KEYS_DIR="$CONFIG_DIR/keys"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -f "$SCRIPT_DIR/my-git-core.inc.sh" ]; then
+    echo "Error: shared library 'my-git-core.inc.sh' not found next to $(basename "$0")" >&2
+    exit 1
+fi
+# shellcheck source=my-git-core.inc.sh
+. "$SCRIPT_DIR/my-git-core.inc.sh"
+
+CONFIG_DIR="$MY_GIT_CONFIG_DIR"
+PROFILES_DIR="$MY_GIT_PROFILES_DIR"
+KEYS_DIR="$MY_GIT_KEYS_DIR"
 ALLOWED_SIGNERS="$CONFIG_DIR/allowed_signers"
 
 usage() {
@@ -15,6 +23,7 @@ Inspects or restores Git profiles and SSH keys from an encrypted archive.
 Options:
   -l, --list           List all profiles in the archive (name, email) without importing
   -a, --all            Import all profiles contained in the archive
+  --protect            Migrate imported plaintext tokens into the system keyring
   -h, --help           Display this help message
 
 Examples:
@@ -39,6 +48,7 @@ fi
 
 ACTION="import"
 ALL_PROFILES=false
+PROTECT=false
 TARGET_PROFILES=()
 
 # Parse arguments
@@ -50,6 +60,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         -a|--all)
             ALL_PROFILES=true
+            shift
+            ;;
+        --protect)
+            PROTECT=true
             shift
             ;;
         -h|--help)
@@ -94,28 +108,6 @@ if [ ! -d "$STAGED_PROFILES" ]; then
     exit 1
 fi
 
-# Helper: parse fields from a profile file
-parse_profile_field() {
-    local file="$1"
-    local target_key="$2"
-    local value=""
-
-    while IFS='=' read -r key val || [ -n "$key" ]; do
-        [[ "$key" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${key// }" ]] && continue
-        key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
-        val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
-        if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
-
-        if [ "$key" = "$target_key" ]; then
-            value="$val"
-            break
-        fi
-    done < "$file"
-
-    echo "$value"
-}
-
 # Action 1: List contents
 if [ "$ACTION" = "list" ]; then
     echo "==> Profiles found in archive '$ARCHIVE':"
@@ -126,8 +118,8 @@ if [ "$ACTION" = "list" ]; then
     for file in "$STAGED_PROFILES"/*; do
         [ ! -f "$file" ] && continue
         prof=$(basename "$file")
-        p_name=$(parse_profile_field "$file" "name")
-        p_email=$(parse_profile_field "$file" "email")
+        p_name=$(parse_field "$file" "name")
+        p_email=$(parse_field "$file" "email")
         printf "%-20s %-25s %-30s\n" "$prof" "${p_name:--}" "${p_email:--}"
     done
     exit 0
@@ -167,8 +159,8 @@ for profile in "${TARGET_PROFILES[@]}"; do
     echo "  + Imported profile: $profile"
 
     # Identify associated keys
-    ssh_key_name=$(parse_profile_field "$src_profile" "ssh_key")
-    signing_key_name=$(parse_profile_field "$src_profile" "signing_key")
+    ssh_key_name=$(parse_field "$src_profile" "ssh_key")
+    signing_key_name=$(parse_field "$src_profile" "signing_key")
 
     keys_to_copy=()
     [ -n "$ssh_key_name" ] && keys_to_copy+=("$(basename "$ssh_key_name")")
@@ -204,6 +196,10 @@ for profile in "${TARGET_PROFILES[@]}"; do
             fi
         fi
     done
+    # Optionally re-secure plaintext tokens into the system keyring
+    if [ "$PROTECT" = true ]; then
+        protect_profile_tokens "$dest_profile" "$profile"
+    fi
 done
 
 # Ensure Git global allowedSignersFile is set
