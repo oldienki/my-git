@@ -16,10 +16,11 @@ Configuration lives under `${XDG_CONFIG_HOME:-$HOME/.config}/my-git`.
 ### 2.1 Shared Library
 
 - `my-git-core.inc.sh` — shared include file installed alongside the
-  tools. Defines `resolve_token`, `parse_field`, `resolve_key_path`,
-  `find_profile_by_email`, `protect_profile_tokens`, and the
-  `MY_GIT_*` config directory variables. Every tool sources it from
-  its own directory at startup and fails fast when it is missing.
+  tools. Defines `resolve_token`, `parse_field`, `parse_section_field`,
+  `list_docker_sections`, `resolve_key_path`, `find_profile_by_email`,
+  `protect_profile_tokens`, and the `MY_GIT_*` config directory variables.
+  Every tool sources it from its own directory at startup and fails fast
+  when it is missing.
 
 ### 2.2 Profile Management Tools
 
@@ -59,7 +60,9 @@ Configuration lives under `${XDG_CONFIG_HOME:-$HOME/.config}/my-git`.
 
 ```text
 $XDG_CONFIG_HOME/my-git/
-  profiles/<name>      INI-style key = value files (chmod 600)
+  profiles/<name>      INI-style key = value files (chmod 600) with
+                       optional [docker:<registry>] sections holding
+                       per-registry `user`/`token` credentials
   keys/<name>[.pub]    Ed25519 SSH keys (private 600, public 644)
   allowed_signers      SSH allowed-signers file for commit signing
 ```

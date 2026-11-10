@@ -123,6 +123,29 @@ docker_registry = ghcr.io
 * **`secret-tool:` references** are resolved at publish time from the system keyring via `resolve_token` (see `my-git-core.inc.sh`). `git-protect` writes these references automatically when migrating plaintext tokens.
 * **`pass:` references** are treated as already secured and passed through unchanged.
 
+#### Per-Registry Docker Credentials
+
+A single profile can hold credentials for multiple container registries via
+`[docker:<registry>]` sections. The flat `docker_user` / `docker_token` /
+`docker_registry` keys remain the default credential set:
+
+```ini
+docker_user = jane
+docker_token = secret-tool:service=my-git,profile=work,token=docker_token
+docker_registry = docker.io
+
+[docker:ghcr.io]
+user = janedoe
+token = secret-tool:service=my-git,profile=work,token=docker_ghcr_io
+```
+
+When `git-docker-publish` pushes to a registry (derived from the image prefix,
+`-r` flag, or `docker_registry`), it reads `user` and `token` from the matching
+`[docker:<registry>]` section first. Missing values — or a missing section —
+fall back to the flat `docker_user` / `docker_token` keys. `git-protect`
+migrates section `token` values to the keyring under the attribute
+`docker_<registry>` (dots replaced by underscores, e.g. `docker_ghcr_io`).
+
 ---
 
 ## Utilities
@@ -446,7 +469,12 @@ git-docker-publish [options] <image_name[:tag]> [docker_push_options...]
 * `-u`, `--user <username>`: Override the registry username.
 * `-h`, `--help`: Show usage instructions.
 
-Resolves `docker_token` and pipes it to `docker login --password-stdin`, pushes, then cleans up the temporary auth session.
+Resolves the target registry, then looks up credentials in the profile's
+`[docker:<registry>]` section, falling back to the flat `docker_user` /
+`docker_token` keys. The resolved token is piped to
+`docker login --password-stdin`, the image is pushed, and the temporary auth
+session is cleaned up. See *Per-Registry Docker Credentials* in the profile
+format section.
 
 ---
 
