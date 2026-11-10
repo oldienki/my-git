@@ -26,7 +26,11 @@ Configuration lives under `${XDG_CONFIG_HOME:-$HOME/.config}/my-git`.
 - `git-add-profile` — creates a profile file, generates an Ed25519 SSH
   key pair, registers the public key in `allowed_signers`.
 - `git-set-profile` — applies a profile to the current repository
-  (`user.name`, `user.email`, `core.sshCommand`, SSH signing config).
+  (`user.name`, `user.email`, `core.sshCommand`, SSH signing config) and
+  writes `my-git.profile` to bind the repository to the profile.
+- `git-refresh` — resolves the bound profile via `my-git.profile` or a
+  `user.email` fallback, updates stale values, and unsets keys the
+  profile no longer defines (`core.sshCommand`, signing group).
 - `git-protect` — migrates plaintext `cargo_token`, `pypi_token`, and
   `docker_token` values into the system keyring and rewrites the
   profile field to `secret-tool:service=my-git,profile=<p>,token=<k>`.
@@ -63,7 +67,9 @@ $XDG_CONFIG_HOME/my-git/
 ## 4. Data Flows
 
 ```text
-profile file ──> git-set-profile ──> repo git config (user.*, core.sshCommand)
+profile file ──> git-set-profile ──> repo git config (user.*, core.sshCommand,
+                                    my-git.profile binding key)
+profile file ──> git-refresh     ──> repo git config (add/update/unset drift)
 profile file ──> publish tools  ──> token env var ──> cargo/twine/uv/docker
 profile file ──> git-protect    ──> secret-tool store; field rewritten
                                    to secret-tool: reference

@@ -239,6 +239,7 @@ git-set-profile freelance
 2. Reads the profile settings from `~/.config/my-git/profiles/<profile>`.
 3. Validates and enforces correct POSIX permissions on keys and directories.
 4. Updates local repository configurations:
+* Sets `my-git.profile = <profile>` to record which profile owns the repository.
 * Sets `core.sshCommand = ssh -i <key> -o IdentitiesOnly=yes` to ensure network actions (`pull`, `fetch`, `push`) use the correct key.
 * Updates `user.name` and `user.email`.
 * Configures SSH commit/tag signing (`gpg.format = ssh`, `user.signingkey`, `commit.gpgsign = true`).
@@ -291,7 +292,7 @@ git-export-profile --all -o ~/Desktop/my-git-backup.tar.enc
 
 ---
 
-### 6. `git-import-profile`
+### 7. `git-import-profile`
 
 Inspects or restores profiles and SSH keys from an encrypted archive created by `git-export-profile`.
 
@@ -334,7 +335,7 @@ git-import-profile backup.tar.enc work freelance
 
 ---
 
-### 7. `git-protect`
+### 8. `git-protect`
 
 Audits profiles for plaintext credentials and insecure SSH keys, then hardens them.
 
@@ -353,7 +354,7 @@ git-protect --all
 
 ---
 
-### 8. `git-cargo-publish`
+### 9. `git-cargo-publish`
 
 Publishes a Rust crate with `cargo publish` using the `cargo_token` of the profile matching the repository's `user.email`.
 
@@ -365,7 +366,7 @@ Reads `git config user.email`, finds the matching profile, resolves `cargo_token
 
 ---
 
-### 9. `git-pypi-publish`
+### 10. `git-pypi-publish`
 
 Uploads a Python package to PyPI with `twine` using the profile's `pypi_token`.
 
@@ -377,7 +378,7 @@ Resolves the token into `TWINE_PASSWORD` with `TWINE_USERNAME=__token__`, then r
 
 ---
 
-### 10. `git-uv-publish`
+### 11. `git-uv-publish`
 
 Publishes a Python package with `uv publish` using the profile's `pypi_token`.
 
@@ -389,7 +390,7 @@ Resolves the token into `UV_PUBLISH_TOKEN` and forwards all arguments.
 
 ---
 
-### 11. `git-docker-publish`
+### 12. `git-docker-publish`
 
 Pushes a Docker/OCI image using the profile's `docker_token`, with authentication isolated in an ephemeral `DOCKER_CONFIG` (leaves `~/.docker/config.json` untouched).
 
