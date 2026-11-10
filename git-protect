@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -f "$SCRIPT_DIR/my-git-core.inc.sh" ]; then
+    echo "Error: shared library 'my-git-core.inc.sh' not found next to $(basename "$0")" >&2
+    exit 1
+fi
+# shellcheck source=my-git-core.inc.sh
+. "$SCRIPT_DIR/my-git-core.inc.sh"
+
+CONFIG_DIR="$MY_GIT_CONFIG_DIR"
+PROFILES_DIR="$MY_GIT_PROFILES_DIR"
+KEYS_DIR="$MY_GIT_KEYS_DIR"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [<profile> | --all | -a]
+
+Audits my-git profile(s) for plaintext credentials and insecure SSH keys.
+Migrates plaintext API tokens into the system keyring (via secret-tool),
+updates profile references, enforces 700/600 POSIX permissions, and audits
+SSH private keys for empty passphrases.
+
+Options:
+  <profile>      Name of a single profile to inspect and protect
+  -a, --all      Inspect and protect all profiles in $PROFILES_DIR
+  -h, --help     Display this help message
+
+Examples:
+  $(basename "$0") work
+  $(basename "$0") --all
+EOF
+    exit 1
+}
+
+if [ "$#" -eq 0 ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    usage
+fi
+
+# 1. Verify secret-tool is installed
+if ! command -v secret-tool >/dev/null 2>&1; then
+    echo "Error: 'secret-tool' executable not found." >&2
+    echo "Install libsecret tools on Ubuntu/Debian via:" >&2
+    echo "  sudo apt update && sudo apt install libsecret-tools" >&2
+    exit 1
+fi
+
+if [ ! -d "$PROFILES_DIR" ]; then
+    echo "Error: Profiles directory not found at '$PROFILES_DIR'" >&2
+    exit 1
+fi
+
+# 2. Determine target profiles
+TARGET_PROFILES=()
+
+if [ "$1" = "-a" ] || [ "$1" = "--all" ]; then
+    for f in "$PROFILES_DIR"/*; do
+        [ -f "$f" ] && TARGET_PROFILES+=("$(basename "$f")")
+    done
+    if [ "${#TARGET_PROFILES[@]}" -eq 0 ]; then
+        echo "No profiles found in '$PROFILES_DIR'."
+        exit 0
+    fi
+else
+    PROFILE_NAME="$1"
+    if [ ! -f "$PROFILES_DIR/$PROFILE_NAME" ]; then
+        echo "Error: Profile '$PROFILE_NAME' does not exist in '$PROFILES_DIR'" >&2
+        exit 1
+    fi
+    TARGET_PROFILES+=("$PROFILE_NAME")
+fi
+
+# 3. Enforce directory permissions
+chmod 700 "$CONFIG_DIR" 2>/dev/null || true
+chmod 700 "$PROFILES_DIR"
+[ -d "$KEYS_DIR" ] && chmod 700 "$KEYS_DIR"
+
+protect_profile() {
+    local profile="$1"
+    local profile_file="$PROFILES_DIR/$profile"
+
+    echo "==> Auditing profile: $profile"
+    chmod 600 "$profile_file"
+
+    local ssh_key_name
+    ssh_key_name=$(parse_field "$profile_file" "ssh_key")
+
+    protect_profile_tokens "$profile_file" "$profile"
+
+    # 4. Audit SSH private key security
+    if [ -n "$ssh_key_name" ]; then
+        local priv_key="$KEYS_DIR/$ssh_key_name"
+        if [ -f "$priv_key" ]; then
+            chmod 600 "$priv_key"
+            [ -f "${priv_key}.pub" ] && chmod 644 "${priv_key}.pub"
+
+            # Check if SSH private key has an empty passphrase
+            if ssh-keygen -y -P "" -f "$priv_key" >/dev/null 2>&1; then
+                echo "  [WARNING] SSH key '$ssh_key_name' has NO passphrase!"
+                echo "            Anyone with local read access can use this key."
+                echo "            Add a passphrase using: ssh-keygen -p -f \"$priv_key\""
+            else
+                echo "  [OK] SSH key '$ssh_key_name': protected with a passphrase (chmod 600)"
+            fi
+        else
+            echo "  [NOTICE] Referenced SSH key '$ssh_key_name' not found in $KEYS_DIR"
+        fi
+    fi
+
+    echo "  -> Finished profile '$profile'."
+    echo ""
+}
+
+for p in "${TARGET_PROFILES[@]}"; do
+    protect_profile "$p"
+done
+
+echo "==> Protection check complete."
