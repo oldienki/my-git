@@ -13,6 +13,7 @@ TOOLS=(
     "git-clone"
     "git-init"
     "git-set-profile"
+    "git-refresh"
     "git-export-profile"
     "git-import-profile"
     "git-cargo-publish"

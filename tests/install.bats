@@ -17,6 +17,7 @@ teardown() {
     run "$REPO_ROOT/install-my-git" "$TARGET"
     [ "$status" -eq 0 ]
     [ -x "$TARGET/git-cargo-publish" ]
+    [ -x "$TARGET/git-refresh" ]
     [ -f "$TARGET/my-git-core.inc.sh" ]
     [ ! -x "$TARGET/my-git-core.inc.sh" ]
 }

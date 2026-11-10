@@ -43,6 +43,16 @@ _my_git_set_profile_complete() {
 }
 complete -F _my_git_set_profile_complete git-set-profile
 
+# Completion for git-refresh
+_git_refresh_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--force -f --help -h" -- "$cur") )
+    fi
+}
+complete -F _git_refresh_complete git-refresh
+
 # Completion for git-export-profile
 _my_git_export_profile_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
