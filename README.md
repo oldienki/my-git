@@ -255,7 +255,49 @@ git-set-profile freelance
 
 ---
 
-### 5. `git-export-profile`
+### 5. `git-refresh`
+
+Synchronizes the current repository's Git configuration with its linked profile.
+Resolves the profile via `my-git.profile` (written by `git-clone`, `git-init`,
+and `git-set-profile`) or by matching `user.email` against the profiles directory.
+
+```bash
+git-refresh [--force]
+```
+
+#### Options:
+
+* `-f`, `--force`: Re-apply all settings even when values already match.
+* `-h`, `--help`: Show usage instructions.
+
+#### What it does:
+
+1. Detects the bound profile and binds legacy repositories by writing `my-git.profile`.
+2. Updates `user.name`, `user.email`, `core.sshCommand`, and the SSH signing group
+   (`gpg.format`, `user.signingkey`, `commit.gpgsign`, `tag.gpgsign`,
+   `gpg.ssh.allowedSignersFile`) when the profile changed.
+3. Removes `core.sshCommand` and signing keys the profile no longer defines,
+   e.g. after a key was rotated out.
+4. Reports each action as `[ADDED]`, `[UPDATED]`, `[OK]`, or `[REMOVED]`.
+
+#### Shell prompt integration (Starship)
+
+The bound profile name is readable with zero-latency via `git config`:
+
+```toml
+[custom.git_profile]
+description = "Displays the active my-git profile"
+command = "git config --local --get my-git.profile"
+when = "git rev-parse --is-inside-work-tree 2>/dev/null && git config --local --get my-git.profile"
+style = "bold yellow"
+format = "[$symbol$output]($style) "
+```
+
+Add `${custom.git_profile}` to your `format` string next to `$git_branch`.
+
+---
+
+### 6. `git-export-profile`
 
 Bundles specified Git profiles and their associated private/public SSH keys into a password-protected, AES-256-CBC encrypted tar archive.
 
