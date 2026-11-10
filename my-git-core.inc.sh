@@ -103,6 +103,22 @@ parse_section_field() {
     echo "$value"
 }
 
+# List registry names of all [docker:<registry>] sections in a profile file,
+# one per line.
+#   $1 = profile file path
+list_docker_sections() {
+    local file="$1"
+    local line
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        if [[ "$line" =~ ^\[docker:(.+)\]$ ]]; then
+            echo "${BASH_REMATCH[1]}"
+        fi
+    done <"$file"
+}
+
 # Find the profile name matching an email address. Prints "" when no match.
 #   $1 = email
 find_profile_by_email() {
@@ -150,10 +166,14 @@ protect_profile_tokens() {
 
     local tmp_file
     tmp_file=$(mktemp)
-    local key val is_sensitive s_key
+    local key val is_sensitive s_key token_attr section_registry
+    local current_section=""
 
     while IFS= read -r line || [ -n "$line" ]; do
-        if [[ "$line" =~ ^[[:space:]]*([a-zA-Z0-9_]+)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+        if [[ "$line" =~ ^[[:space:]]*\[(.*)\][[:space:]]*$ ]]; then
+            current_section="${BASH_REMATCH[1]}"
+            echo "$line" >>"$tmp_file"
+        elif [[ "$line" =~ ^[[:space:]]*([a-zA-Z0-9_]+)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
             key="${BASH_REMATCH[1]}"
             val="${BASH_REMATCH[2]}"
 
@@ -166,12 +186,19 @@ protect_profile_tokens() {
             fi
 
             is_sensitive=false
+            token_attr="$key"
             for s_key in "${MY_GIT_SENSITIVE_KEYS[@]}"; do
-                if [ "$key" = "$s_key" ]; then
+                if [ "$key" = "$s_key" ] && [ -z "$current_section" ]; then
                     is_sensitive=true
                     break
                 fi
             done
+            if [ "$is_sensitive" = false ] && [ "$key" = "token" ] &&
+                [[ "$current_section" == docker:* ]]; then
+                is_sensitive=true
+                section_registry="${current_section#docker:}"
+                token_attr="docker_${section_registry//./_}"
+            fi
 
             if [ "$is_sensitive" = true ] && [ -n "$val" ]; then
                 if [[ "$val" =~ ^secret-tool: ]] || [[ "$val" =~ ^pass: ]]; then
@@ -179,12 +206,12 @@ protect_profile_tokens() {
                     echo "$line" >>"$tmp_file"
                 else
                     printf "%s" "$val" | secret-tool store \
-                        --label="my-git $key for $profile" \
+                        --label="my-git $token_attr for $profile" \
                         service my-git \
                         profile "$profile" \
-                        token "$key"
+                        token "$token_attr"
 
-                    echo "$key = secret-tool:service=my-git,profile=$profile,token=$key" >>"$tmp_file"
+                    echo "$key = secret-tool:service=my-git,profile=$profile,token=$token_attr" >>"$tmp_file"
                     echo "  [SECURED] $key: moved plaintext token to system keyring"
                     continue
                 fi

@@ -13,7 +13,7 @@ setup() {
     ARCHIVE="$TEST_HOME/exp.tar.enc"
 
     printf 'name = J\nemail = w@x.com\ncargo_token = secret-tool:service=my-git,profile=work,token=cargo_token\n' \
-        > "$XDG_CONFIG_HOME/my-git/profiles/work"
+        >"$XDG_CONFIG_HOME/my-git/profiles/work"
 }
 
 teardown() {
@@ -27,8 +27,32 @@ teardown() {
     grep -q 'secret-tool:' "$XDG_CONFIG_HOME/my-git/profiles/work"
     # Decrypt and inspect staged profile
     printf 'pw\n' | openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 \
-        -pass stdin -in "$ARCHIVE" 2>/dev/null | tar -xzO profiles/work \
-        | grep -q 'cargo_token = keyring-secret-1'
+        -pass stdin -in "$ARCHIVE" 2>/dev/null | tar -xzO profiles/work |
+        grep -q 'cargo_token = keyring-secret-1'
+}
+
+@test "export resolves secret-tool ref inside docker section to plaintext" {
+    printf 'name = J\nemail = w@x.com\ndocker_token = secret-tool:service=my-git,profile=work,token=docker_token\n\n[docker:ghcr.io]\nuser = octocat\ntoken = secret-tool:service=my-git,profile=work,token=docker_ghcr_io\n' \
+        >"$XDG_CONFIG_HOME/my-git/profiles/work"
+    printf 'pw\npw\n' | "$REPO_ROOT/git-export-profile" work -o "$ARCHIVE" >/dev/null
+    [ -f "$ARCHIVE" ]
+    # Source profile must stay protected
+    grep -q 'secret-tool:' "$XDG_CONFIG_HOME/my-git/profiles/work"
+    # Decrypt and inspect staged profile: section token resolved to plaintext
+    printf 'pw\n' | openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 \
+        -pass stdin -in "$ARCHIVE" 2>/dev/null | tar -xzO profiles/work |
+        grep -q 'token = keyring-secret-1'
+}
+
+@test "import --protect re-secures section tokens" {
+    printf 'name = J\nemail = w@x.com\n\n[docker:ghcr.io]\nuser = octocat\ntoken = ghp_plain\n' \
+        >"$XDG_CONFIG_HOME/my-git/profiles/work"
+    printf 'pw\npw\n' | "$REPO_ROOT/git-export-profile" work -o "$ARCHIVE" >/dev/null
+    rm "$XDG_CONFIG_HOME/my-git/profiles/work"
+    printf 'pw\n' | "$REPO_ROOT/git-import-profile" "$ARCHIVE" --all --protect >/dev/null
+    grep -q 'token = secret-tool:service=my-git,profile=work,token=docker_ghcr_io' \
+        "$XDG_CONFIG_HOME/my-git/profiles/work"
+    grep -q 'ghp_plain' "$STUB_STORE_LOG"
 }
 
 @test "import default keeps plaintext tokens" {

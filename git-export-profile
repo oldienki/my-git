@@ -45,29 +45,29 @@ TARGET_PROFILES=()
 # Parse command line options
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -a|--all)
-            ALL_PROFILES=true
-            shift
-            ;;
-        -o|--output)
-            if [ -z "${2:-}" ]; then
-                echo "Error: Option '$1' requires an argument" >&2
-                exit 1
-            fi
-            OUTPUT_FILE="$2"
-            shift 2
-            ;;
-        -h|--help)
-            usage
-            ;;
-        -*)
-            echo "Error: Unknown option '$1'" >&2
+    -a | --all)
+        ALL_PROFILES=true
+        shift
+        ;;
+    -o | --output)
+        if [ -z "${2:-}" ]; then
+            echo "Error: Option '$1' requires an argument" >&2
             exit 1
-            ;;
-        *)
-            TARGET_PROFILES+=("$1")
-            shift
-            ;;
+        fi
+        OUTPUT_FILE="$2"
+        shift 2
+        ;;
+    -h | --help)
+        usage
+        ;;
+    -*)
+        echo "Error: Unknown option '$1'" >&2
+        exit 1
+        ;;
+    *)
+        TARGET_PROFILES+=("$1")
+        shift
+        ;;
     esac
 done
 
@@ -121,10 +121,25 @@ for profile in "${TARGET_PROFILES[@]}"; do
             resolved=$(resolve_token "$s_val")
             if [ "$resolved" != "$s_val" ]; then
                 resolved_esc=$(printf '%s' "$resolved" | sed 's/[&|\]/\\&/g')
-                sed -i "s|^$s_key[[:space:]]*=.*|$s_key = $resolved_esc|" "$STAGED_PROFILE"
+                sed -i "s|^${s_key}[[:space:]]*=.*|${s_key} = $resolved_esc|" "$STAGED_PROFILE"
             fi
         fi
     done
+
+    # Resolve token refs inside [docker:<registry>] sections the same way
+    while IFS= read -r registry; do
+        [ -z "$registry" ] && continue
+        s_val=$(parse_section_field "$STAGED_PROFILE" "docker:$registry" "token")
+        if [ -n "$s_val" ]; then
+            resolved=$(resolve_token "$s_val")
+            if [ "$resolved" != "$s_val" ]; then
+                resolved_esc=$(printf '%s' "$resolved" | sed 's/[&|\]/\\&/g')
+                registry_esc=$(printf '%s' "$registry" | sed 's/[][\.*^$/]/\\&/g')
+                sed -i "/^\[docker:${registry_esc}\]/,/^\[/ s|^token[[:space:]]*=.*|token = $resolved_esc|" \
+                    "$STAGED_PROFILE"
+            fi
+        fi
+    done <<<"$(list_docker_sections "$STAGED_PROFILE")"
     echo "  + Profile: $profile"
 
     SSH_KEY=$(parse_field "$PROFILE_FILE" "ssh_key")
@@ -173,7 +188,7 @@ echo "==> Encrypting archive with AES-256-CBC..."
 
 # Package into tar and encrypt via openssl using PBKDF2 key derivation
 export MY_GIT_ENC_PASS="$PASS1"
-tar -czf - -C "$TMP_STAGING" profiles keys | \
+tar -czf - -C "$TMP_STAGING" profiles keys |
     openssl enc -aes-256-cbc -salt -pbkdf2 -iter 100000 -pass env:MY_GIT_ENC_PASS -out "$OUTPUT_FILE"
 
 # Wipe passphrase variables from environment
