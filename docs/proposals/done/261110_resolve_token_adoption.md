@@ -5,8 +5,8 @@
 
 - **Author:** agent session
 - **Created:** 2026-11-10
-- **Status:** created
-- **Implemented:** <ISO 8601 date — set only when the proposal moves to `docs/proposals/done/`>
+- **Status:** implemented
+- **Implemented:** 2026-11-10
 
 ## 1. Summary
 
