@@ -5,8 +5,8 @@
 
 - **Author:** agent session
 - **Created:** 2026-11-10
-- **Status:** created
-- **Implemented:**
+- **Status:** implemented
+- **Implemented:** 2026-11-10
 
 ## 1. Summary
 
