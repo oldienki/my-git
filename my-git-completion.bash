@@ -159,3 +159,15 @@ _git_docker_publish_complete() {
     fi
 }
 complete -F _git_docker_publish_complete git-docker-publish
+
+# Completion for git-protect
+_git_protect_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--all -a --help -h" -- "$cur") )
+    else
+        COMPREPLY=( $(compgen -W "$(_my_git_get_profiles)" -- "$cur") )
+    fi
+}
+complete -F _git_protect_complete git-protect
+

@@ -19,6 +19,7 @@ TOOLS=(
     "git-pypi-publish"
     "git-uv-publish"
     "git-docker-publish"
+    "git-protect"
 )
 
 usage() {

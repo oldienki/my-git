@@ -13,6 +13,7 @@ Each profile maintains its own dedicated SSH key pair, commit metadata (`user.na
 * **Zero-Friction SSH Signing**: Built-in support for native Git SSH commit and tag signing.
 * **Automatic Permissions Management**: Automatically enforces strict POSIX permissions (`700` for directories, `600` for private keys, `644` for public keys).
 * **Local Verification**: Centralized `allowed_signers` management eliminates `No principal matched` errors when running `git log --show-signature`.
+* **System Keyring Integration**: `git-protect` migrates plaintext publish tokens into the system keyring; all tools resolve `secret-tool:` references at runtime via the shared `my-git-core.inc.sh` library.
 
 
 ---
@@ -330,6 +331,79 @@ git-import-profile backup.tar.enc work freelance
 * Restores SSH private and public keys to `~/.config/my-git/keys/`, enforcing strict POSIX permissions (`600` for private keys, `644` for public keys, `700` for directories).
 * Automatically extracts public signing keys and registers them in `~/.config/my-git/allowed_signers` (skipping duplicates).
 * Configures Git's global `gpg.ssh.allowedSignersFile` setting if not already present.
+
+---
+
+### 7. `git-protect`
+
+Audits profiles for plaintext credentials and insecure SSH keys, then hardens them.
+
+```bash
+git-protect <profile>
+git-protect --all
+```
+
+#### What it does:
+
+1. Migrates plaintext `cargo_token`, `pypi_token`, and `docker_token` values into the system keyring via `secret-tool` (requires `libsecret-tools`, e.g. `sudo apt install libsecret-tools`).
+2. Rewrites the profile fields to `secret-tool:service=my-git,profile=<p>,token=<k>` references, leaving `pass:` references and already-protected fields untouched.
+3. Preserves comments, blank lines, and field order in the profile file.
+4. Enforces strict permissions (`600` profiles/private keys, `644` public keys, `700` directories).
+5. Warns when a referenced SSH private key has an empty passphrase.
+
+---
+
+### 8. `git-cargo-publish`
+
+Publishes a Rust crate with `cargo publish` using the `cargo_token` of the profile matching the repository's `user.email`.
+
+```bash
+git-cargo-publish [cargo_publish_options...]
+```
+
+Reads `git config user.email`, finds the matching profile, resolves `cargo_token` via `resolve_token`, and exports it as `CARGO_REGISTRY_TOKEN`. Forwards all arguments to `cargo publish`.
+
+---
+
+### 9. `git-pypi-publish`
+
+Uploads a Python package to PyPI with `twine` using the profile's `pypi_token`.
+
+```bash
+git-pypi-publish [twine_options...] [dist_files...]
+```
+
+Resolves the token into `TWINE_PASSWORD` with `TWINE_USERNAME=__token__`, then runs `twine upload`. Defaults to `./dist/*` when no files are given.
+
+---
+
+### 10. `git-uv-publish`
+
+Publishes a Python package with `uv publish` using the profile's `pypi_token`.
+
+```bash
+git-uv-publish [uv_publish_options...]
+```
+
+Resolves the token into `UV_PUBLISH_TOKEN` and forwards all arguments.
+
+---
+
+### 11. `git-docker-publish`
+
+Pushes a Docker/OCI image using the profile's `docker_token`, with authentication isolated in an ephemeral `DOCKER_CONFIG` (leaves `~/.docker/config.json` untouched).
+
+```bash
+git-docker-publish [options] <image_name[:tag]> [docker_push_options...]
+```
+
+#### Options:
+
+* `-r`, `--registry <url>`: Override the target registry (default from profile `docker_registry`, else `docker.io`).
+* `-u`, `--user <username>`: Override the registry username.
+* `-h`, `--help`: Show usage instructions.
+
+Resolves `docker_token` and pipes it to `docker login --password-stdin`, pushes, then cleans up the temporary auth session.
 
 ---
 
