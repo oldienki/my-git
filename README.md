@@ -30,7 +30,7 @@ cd my-git
 
 ### What the installer does:
 
-1. **Installs executables**: Copies all CLI tools (`git-add-profile`, `git-clone`, `git-init`, `git-set-profile`, `git-export-profile`, `git-import-profile`) to `~/.local/bin` (or a specified directory) with `755` permissions.
+1. **Installs executables**: Copies all CLI tools and the shared library `my-git-core.inc.sh` (sourced by the tools at runtime) to `~/.local/bin` (or a specified directory).
 2. **Initializes config directories**: Creates `~/.config/my-git/profiles` and `~/.config/my-git/keys` with strict `700` POSIX permissions.
 3. **Installs shell completion**: Places `my-git-completion.bash` into `~/.config/my-git/`.
 4. **Collision safety**: Checks for existing files or symlinks before writing. If collisions exist, it safely aborts unless forced.
@@ -105,6 +105,22 @@ signing_key = work.pub
 ```
 
 * Paths for `ssh_key` and `signing_key` can be relative to `~/.config/my-git/keys/`, `~/.ssh/`, or specified as absolute paths.
+
+### Publish Token Fields
+
+Profiles may carry registry credentials used by `git-cargo-publish`, `git-pypi-publish`, `git-uv-publish`, and `git-docker-publish`:
+
+```ini
+cargo_token = secret-tool:service=my-git,profile=work,token=cargo_token
+pypi_token = pass:my-git/work/pypi
+docker_user = jane
+docker_token = secret-tool:service=my-git,profile=work,token=docker_token
+docker_registry = ghcr.io
+```
+
+* **Plaintext** values are used verbatim.
+* **`secret-tool:` references** are resolved at publish time from the system keyring via `resolve_token` (see `my-git-core.inc.sh`). `git-protect` writes these references automatically when migrating plaintext tokens.
+* **`pass:` references** are treated as already secured and passed through unchanged.
 
 ---
 
@@ -267,9 +283,10 @@ git-export-profile --all -o ~/Desktop/my-git-backup.tar.enc
 
 1. Prompts for an encryption passphrase with non-echoed input and confirmation.
 2. Isolates profile configurations and discovers all referenced SSH private and public keys.
-3. Stages the files into a clean temporary directory.
-4. Creates a compressed `tar` archive and encrypts it using OpenSSL (`aes-256-cbc`, `-salt`, `-pbkdf2`, `100,000` iterations).
-5. Clears sensitive passphrase variables from memory upon completion.
+3. Resolves `secret-tool:` token references back to plaintext in the staged copies, so the archive is portable across machines.
+4. Stages the files into a clean temporary directory.
+5. Creates a compressed `tar` archive and encrypts it using OpenSSL (`aes-256-cbc`, `-salt`, `-pbkdf2`, `100,000` iterations).
+6. Clears sensitive passphrase variables from memory upon completion.
 
 ---
 
@@ -286,6 +303,7 @@ git-import-profile <archive.tar.enc> [options | <profile1> [profile2 ...]]
 
 * `-l`, `--list`: Display a table of all profiles in the archive (including names and emails) without importing anything.
 * `-a`, `--all`: Import all profiles and keys stored in the archive.
+* `--protect`: After import, migrate plaintext tokens into the system keyring and rewrite profile fields to `secret-tool:` references (same migration as `git-protect`).
 * `<profile...>`: Import only the designated profile(s).
 * `-h`, `--help`: Show usage instructions.
 

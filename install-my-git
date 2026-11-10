@@ -78,9 +78,11 @@ if [ ! -f "$SOURCE_DIR/git-clone" ] && [ -d "$SCRIPT_DIR/bin" ] && [ -f "$SCRIPT
     SOURCE_DIR="$SCRIPT_DIR/bin"
 fi
 
-# Validate presence of tool source files
+CORE_INCLUDE="my-git-core.inc.sh"
+
+# Validate presence of tool source files and the shared library
 MISSING_SOURCES=()
-for tool in "${TOOLS[@]}"; do
+for tool in "${TOOLS[@]}" "$CORE_INCLUDE"; do
     if [ ! -f "$SOURCE_DIR/$tool" ]; then
         MISSING_SOURCES+=("$tool")
     fi
@@ -156,6 +158,14 @@ for tool in "${TOOLS[@]}"; do
     chmod 755 "$dest"
     echo "  + Installed: $tool"
 done
+
+# Install the shared library the tools source at runtime
+if [ -e "$TARGET_DIR/$CORE_INCLUDE" ] || [ -L "$TARGET_DIR/$CORE_INCLUDE" ]; then
+    rm -f "$TARGET_DIR/$CORE_INCLUDE"
+fi
+cp "$SOURCE_DIR/$CORE_INCLUDE" "$TARGET_DIR/$CORE_INCLUDE"
+chmod 644 "$TARGET_DIR/$CORE_INCLUDE"
+echo "  + Installed: $CORE_INCLUDE"
 
 echo ""
 echo "==> Installation complete!"

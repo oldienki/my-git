@@ -15,9 +15,11 @@ Configuration lives under `${XDG_CONFIG_HOME:-$HOME/.config}/my-git`.
 
 ### 2.1 Shared Library
 
-- `my-git-core.inc.sh` — shared include file. Currently defines
-  `resolve_token`, which resolves `secret-tool:` references to values
-  in the system keyring via `secret-tool lookup`.
+- `my-git-core.inc.sh` — shared include file installed alongside the
+  tools. Defines `resolve_token`, `parse_field`, `resolve_key_path`,
+  `find_profile_by_email`, `protect_profile_tokens`, and the
+  `MY_GIT_*` config directory variables. Every tool sources it from
+  its own directory at startup and fails fast when it is missing.
 
 ### 2.2 Profile Management Tools
 
@@ -29,9 +31,10 @@ Configuration lives under `${XDG_CONFIG_HOME:-$HOME/.config}/my-git`.
   `docker_token` values into the system keyring and rewrites the
   profile field to `secret-tool:service=my-git,profile=<p>,token=<k>`.
   Enforces 700/600 permissions and audits SSH key passphrases.
-- `git-export-profile` — packs profiles and SSH keys into an AES-256-CBC
-  encrypted tar archive.
-- `git-import-profile` — restores profiles and keys from such an archive.
+- `git-export-profile` — resolves `secret-tool:` refs to plaintext and
+  packs profiles and SSH keys into an AES-256-CBC encrypted tar archive.
+- `git-import-profile` — restores profiles and keys from such an archive;
+  `--protect` re-secures imported tokens via `protect_profile_tokens`.
 - `git-clone`, `git-init` — repository setup helpers.
 
 ### 2.3 Publish Tools
@@ -44,8 +47,9 @@ Configuration lives under `${XDG_CONFIG_HOME:-$HOME/.config}/my-git`.
 
 ### 2.4 Installer and Completion
 
-- `install-my-git` — copies tool executables into a bin directory,
-  creates config directories, installs `my-git-completion.bash`.
+- `install-my-git` — copies tool executables and `my-git-core.inc.sh`
+  into a bin directory, creates config directories, installs
+  `my-git-completion.bash`.
 
 ## 3. Data Layout
 
@@ -63,15 +67,15 @@ profile file ──> git-set-profile ──> repo git config (user.*, core.sshCo
 profile file ──> publish tools  ──> token env var ──> cargo/twine/uv/docker
 profile file ──> git-protect    ──> secret-tool store; field rewritten
                                    to secret-tool: reference
-profile+keys ──> git-export-profile ──> tar | openssl enc (AES-256-CBC)
+profile file ──> publish tools  ──> resolve_token ──> secret-tool lookup
+profile+keys ──> git-export-profile ──> resolve tokens to plaintext
+                                        ──> tar | openssl enc (AES-256-CBC)
+archive ──> git-import-profile ──> plaintext restore (--protect re-secures)
 ```
 
 ## 5. Known Issues and Debt
 
-- Publish tools read token fields verbatim and do not resolve
-  `secret-tool:` references written by `git-protect`.
-- `parse_field` and `resolve_key_path` are duplicated across scripts.
-- `my-git-core.inc.sh` is not installed by `install-my-git` and is not
-  sourced by any tool.
-- `secret-tool:` references are per-machine; exported archives carry
-  references that do not resolve on other machines.
+- `git-clone` and `git-init` do not use the shared include; they do not
+  read profile token fields today.
+- Every tool requires a sibling `my-git-core.inc.sh` at runtime; manual
+  copies of single scripts break without it.
