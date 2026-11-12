@@ -23,7 +23,7 @@ Each profile maintains its own dedicated SSH key pair, commit metadata (`user.na
 Clone the repository and run the `install-my-git` installer:
 
 ```bash
-git clone [https://github.com/oldienki/my-git.git](https://github.com/oldienki/my-git.git)
+git clone https://github.com/oldienki/my-git.git
 cd my-git
 ./install-my-git
 
